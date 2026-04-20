@@ -22,6 +22,7 @@ _log = structlog.get_logger(__name__)
 _TOOL_LIST_PROCS: Final[str] = "nz_list_procedures"
 _TOOL_GET_DDL: Final[str] = "nz_get_procedure_ddl"
 _TOOL_ANALYZE_REFS: Final[str] = "nz_analyze_procedure_references"
+_TOOL_LIST_SCHEMAS: Final[str] = "nz_list_schemas"
 _QUAL_DB_SCHEMA_OBJ: Final[int] = 3
 _QUAL_SCHEMA_OBJ: Final[int] = 2
 
@@ -76,16 +77,19 @@ def _extract_text(res: ToolResult, *, keys: tuple[str, ...]) -> str | None:
     return None
 
 
-def _parse_proc_list(database: str, raw: list[dict[str, Any]]) -> list[_ProcInfo]:
+def _parse_proc_list(database: str, schema: str, raw: list[dict[str, Any]]) -> list[_ProcInfo]:
     procs: list[_ProcInfo] = []
     for item in raw:
-        schema = str(
-            item.get("schema") or item.get("proc_schema") or item.get("procedure_schema") or ""
-        ).strip()
         name = str(item.get("name") or item.get("procedure") or item.get("proc_name") or "").strip()
-        if not schema or not name:
+        if not name:
             continue
-        signature = str(item.get("signature") or item.get("args") or item.get("parameters") or "()")
+        signature = str(
+            item.get("arguments")
+            or item.get("signature")
+            or item.get("args")
+            or item.get("parameters")
+            or "()"
+        )
         last_altered = str(
             item.get("last_altered") or item.get("lastaltertime") or item.get("lastAlterTime") or ""
         )
@@ -102,6 +106,115 @@ def _parse_proc_list(database: str, raw: list[dict[str, Any]]) -> list[_ProcInfo
             )
         )
     return procs
+
+
+def _list_schema_names(client: NzMcpClient, database: str) -> tuple[list[str], str | None]:
+    schemas_res = _call_with_fallbacks(
+        client,
+        _TOOL_LIST_SCHEMAS,
+        [{"database": database}, {"db": database}],
+    )
+    if not _tool_ok(schemas_res):
+        return [], f"failed to list schemas for {database}: {schemas_res.error_code}"
+
+    schema_items = _extract_list(schemas_res, key="schemas")
+    if not schema_items and schemas_res.result is not None:
+        maybe = schemas_res.result.get("items") or schemas_res.result.get("schemas")
+        if isinstance(maybe, list):
+            schema_items = [x for x in maybe if isinstance(x, dict)]
+
+    schema_names = [
+        str(s.get("name") or s.get("schema") or s.get("schema_name") or "").strip()
+        for s in schema_items
+    ]
+    schema_names = [s for s in schema_names if s]
+    if not schema_names:
+        return [], f"list schemas returned empty for {database}"
+    return schema_names, None
+
+
+def _list_procedures_in_schema(
+    client: NzMcpClient, database: str, schema: str
+) -> tuple[list[_ProcInfo], str | None]:
+    procs_res = _call_with_fallbacks(
+        client,
+        _TOOL_LIST_PROCS,
+        [
+            {"database": database, "schema": schema},
+            {"database": database, "schema": schema, "pattern": None},
+            {"db": database, "schema": schema},
+        ],
+    )
+    if not _tool_ok(procs_res):
+        return [], f"failed to list procedures for {database}.{schema}: {procs_res.error_code}"
+
+    raw = _extract_list(procs_res, key="procedures")
+    if not raw and procs_res.result is not None:
+        maybe = procs_res.result.get("items") or procs_res.result.get("procedures")
+        if isinstance(maybe, list):
+            raw = [x for x in maybe if isinstance(x, dict)]
+
+    return _parse_proc_list(database, schema, raw), None
+
+
+def _index_procedures(
+    *,
+    procs: list[_ProcInfo],
+    client: NzMcpClient,
+    chroma: ChromaStore,
+    metadata: MetadataStore,
+    embedder: Embedder,
+) -> tuple[int, int, int, list[str]]:
+    indexed = 0
+    skipped = 0
+    chunks_written = 0
+    errors: list[str] = []
+
+    for proc in procs:
+        key = ProcedureKey(
+            database=proc.database,
+            schema=proc.schema,
+            name=proc.name,
+            signature=proc.signature,
+        )
+        if proc.last_altered:
+            prev_last = metadata.get_last_altered(key)
+            if prev_last is not None and prev_last == proc.last_altered:
+                skipped += 1
+                continue
+
+        _log.info(
+            "kb_index_proc_start",
+            database=proc.database,
+            schema=proc.schema,
+            procedure=proc.name,
+        )
+        did_index, chunks, err = _index_one(
+            client=client,
+            chroma=chroma,
+            metadata=metadata,
+            embedder=embedder,
+            proc=proc,
+        )
+        if err is not None:
+            errors.append(err)
+            _log.error("kb_index_proc_failed", error=err)
+            continue
+        if did_index == 0:
+            skipped += 1
+        else:
+            indexed += 1
+            chunks_written += chunks
+        _log.info(
+            "kb_index_proc_done",
+            database=proc.database,
+            schema=proc.schema,
+            procedure=proc.name,
+            chunks=chunks,
+            indexed=bool(did_index),
+        )
+
+    return indexed, skipped, chunks_written, errors
 
 
 def _call_with_fallbacks(
@@ -319,69 +432,42 @@ def bootstrap(databases: list[str], top_n: int | None = None) -> IndexReport:
     try:
         client.start()
         for db in databases:
-            list_res = _call_with_fallbacks(
-                client,
-                _TOOL_LIST_PROCS,
-                [{"database": db}, {"db": db}],
-            )
-            raw = _extract_list(list_res, key="procedures")
-            if not raw and _tool_ok(list_res) and list_res.result is not None:
-                maybe = list_res.result.get("items") or list_res.result.get("procedures")
-                if isinstance(maybe, list):
-                    raw = [x for x in maybe if isinstance(x, dict)]
+            schemas, err = _list_schema_names(client, db)
+            if err is not None:
+                errors.append(err)
+                continue
 
-            procs = _parse_proc_list(db, raw)
-            if top_n is not None and top_n > 0:
-                procs.sort(key=lambda p: p.size_bytes or 0, reverse=True)
-                procs = procs[:top_n]
+            for schema_name in schemas:
+                procs, proc_err = _list_procedures_in_schema(client, db, schema_name)
+                if proc_err is not None:
+                    errors.append(proc_err)
+                    continue
 
-            for proc in procs:
-                key = ProcedureKey(
-                    database=proc.database,
-                    schema=proc.schema,
-                    name=proc.name,
-                    signature=proc.signature,
-                )
-                if proc.last_altered:
-                    prev_last = metadata.get_last_altered(key)
-                    if prev_last is not None and prev_last == proc.last_altered:
-                        procedures_skipped += 1
-                        continue
+                if top_n is not None and top_n > 0:
+                    procs.sort(key=lambda p: p.size_bytes or 0, reverse=True)
+                    procs = procs[:top_n]
 
-                _log.info(
-                    "kb_index_proc_start",
-                    database=proc.database,
-                    schema=proc.schema,
-                    procedure=proc.name,
-                )
-                indexed, chunks, err = _index_one(
+                newly_indexed, newly_skipped, newly_chunks, proc_errors = _index_procedures(
+                    procs=procs,
                     client=client,
                     chroma=chroma,
                     metadata=metadata,
                     embedder=embedder,
-                    proc=proc,
                 )
-                if err is not None:
-                    errors.append(err)
-                    _log.error("kb_index_proc_failed", error=err)
-                    continue
-                if indexed == 0:
-                    procedures_skipped += 1
-                else:
-                    procedures_indexed += 1
-                    chunks_written += chunks
-                _log.info(
-                    "kb_index_proc_done",
-                    database=proc.database,
-                    schema=proc.schema,
-                    procedure=proc.name,
-                    chunks=chunks,
-                    indexed=bool(indexed),
-                )
+                procedures_indexed += newly_indexed
+                procedures_skipped += newly_skipped
+                chunks_written += newly_chunks
+                errors.extend(proc_errors)
     finally:
         client.stop()
 
     duration = time.perf_counter() - t0
+    if procedures_indexed == 0 and procedures_skipped == 0 and not errors:
+        errors.append(
+            "no procedures were discovered in any database. Verify that nz_list_schemas + "
+            "nz_list_procedures are available and that the profile has visibility over the "
+            "requested databases."
+        )
     return IndexReport(
         procedures_indexed=procedures_indexed,
         procedures_skipped=procedures_skipped,
