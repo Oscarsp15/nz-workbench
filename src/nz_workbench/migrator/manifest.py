@@ -11,10 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field
 class ProcedureIdentity(BaseModel):
     """Fully qualified procedure name."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     database: str = Field(min_length=1, max_length=128)
-    schema: str = Field(min_length=1, max_length=128)
+    schema_: str = Field(min_length=1, max_length=128, alias="schema")
     name: str = Field(min_length=1, max_length=128)
     signature: str | None = Field(default=None, max_length=2048)
 

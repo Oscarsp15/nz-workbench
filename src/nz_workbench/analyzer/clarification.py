@@ -25,7 +25,7 @@ class Clarification:
     ambiguity: AmbiguityKind
     question: str
     context: str
-    candidates: list[str]   # if applicable, possible answers with confidence
+    candidates: list[str]  # if applicable, possible answers with confidence
     change_point_id: int | None = None
 
 

@@ -9,9 +9,9 @@ from dataclasses import dataclass, field
 class EntityMention:
     """A table, column, code, or procedure name mentioned in the REN."""
 
-    kind: str   # "table" | "column" | "procedure" | "code" | "threshold"
+    kind: str  # "table" | "column" | "procedure" | "code" | "threshold"
     value: str
-    context: str   # the surrounding text from the REN
+    context: str  # the surrounding text from the REN
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +19,7 @@ class ChangePointDraft:
     """A candidate change point extracted from the REN (pre-localization)."""
 
     summary: str
-    ren_reference: str   # where in source.md this was described
+    ren_reference: str  # where in source.md this was described
     entities: list[EntityMention] = field(default_factory=list)
 
 
@@ -34,4 +34,4 @@ def parse_ren(source_markdown: str) -> list[ChangePointDraft]:
     raise NotImplementedError
 
 
-__all__ = ["EntityMention", "ChangePointDraft", "parse_ren"]
+__all__ = ["ChangePointDraft", "EntityMention", "parse_ren"]

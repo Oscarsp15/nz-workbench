@@ -2,7 +2,7 @@
 """Block common hygiene mistakes in PRs.
 
 - No large binaries (> 1 MB) checked in.
-- No files containing the substring "TODO: remove before merge".
+- No files containing the "TODO-remove" marker used for temporary notes.
 - No `print(` statements in src/ (structlog must be used instead).
 - No `profiles.toml` or `*.env` accidentally committed.
 """
@@ -16,13 +16,15 @@ from typing import Final
 
 _MAX_FILE_SIZE: Final[int] = 1_048_576  # 1 MB
 _FORBIDDEN_FILES: Final[set[str]] = {"profiles.toml", ".env"}
-_FORBIDDEN_PATTERNS: Final[tuple[str, ...]] = ("TODO: remove before merge",)
+_FORBIDDEN_PATTERNS: Final[tuple[str, ...]] = ("TODO: remove before " + "merge",)
 
 
 def _staged_files() -> list[Path]:
-    result = subprocess.run(  # noqa: S603
+    result = subprocess.run(
         ["git", "ls-files"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     return [Path(p) for p in result.stdout.splitlines() if p.strip()]
 

@@ -10,7 +10,7 @@ from pathlib import Path
 class LearningEntry:
     """One entry in the learning log."""
 
-    date: str      # YYYY-MM-DD
+    date: str  # YYYY-MM-DD
     title: str
     ren: int | None
     what_i_learned: list[str]
