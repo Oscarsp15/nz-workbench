@@ -1,6 +1,6 @@
 """SQLite store for structural procedure metadata (reads / writes / calls).
 
-Populated by the indexer using ``nz_analyze_procedure_references`` from nz-mcp.
+Populated by the indexer via regex extraction over the procedure DDL.
 Consumed by structural queries (e.g. "which SPs write to table X?").
 """
 
