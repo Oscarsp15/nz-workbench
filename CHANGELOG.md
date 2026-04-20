@@ -15,6 +15,10 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) y el p
 - EN: Rich progress bar on `kb-bootstrap` / `kb-refresh` / `kb-refresh-cron` showing per-procedure description, M/N counter, elapsed time, and ETA; INFO logs are silenced while the bar is active to keep the render clean. The indexer exposes a UI-agnostic `on_progress` callback (`ProgressCallback`/`ProgressEvent`).
 
 ### Fixed
+- ES: `_progress_context` ahora silencia también los eventos INFO de structlog mediante un procesador controlado por `set_suppress_info_events`. Antes solo bajaba el root logger, que no afectaba a structlog por usar `PrintLoggerFactory` directo — los eventos `kb_index_proc_start/done` seguían rompiendo la animación de la barra Rich.
+- EN: `_progress_context` now silences structlog INFO events too via a processor driven by `set_suppress_info_events`. Previously only the root stdlib logger was lowered, which had no effect on structlog (goes through `PrintLoggerFactory` directly) — events like `kb_index_proc_start/done` kept shredding the Rich bar animation.
+
+### Fixed
 - ES: `NzMcpClient.call()` ahora desenvuelve el envelope MCP de `tools/call` (lee `structuredContent.result`) y mapea errores estructurados; incluye fallback a JSON en bloques `content`.
 - EN: `NzMcpClient.call()` now unwraps the MCP `tools/call` envelope (reads `structuredContent.result`) and maps structured errors; includes fallback to JSON in `content` blocks.
 - ES: `nz-workbench kb-bootstrap` ahora lista schemas via `nz_list_schemas` y luego procedures por schema (antes devolvía `0/0/0` en silencio porque `nz_list_procedures` requiere `schema` en nz-mcp). Errores de tools se propagan a `IndexReport.errors` en lugar de silenciarse.

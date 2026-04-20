@@ -22,7 +22,7 @@ from rich.table import Table
 
 from nz_workbench import __version__
 from nz_workbench.kb import indexer as kb_indexer
-from nz_workbench.logging_config import configure_logging_for_stdio
+from nz_workbench.logging_config import configure_logging_for_stdio, set_suppress_info_events
 from nz_workbench.mcp_server import run_stdio_server
 
 app = typer.Typer(
@@ -58,6 +58,7 @@ def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:
     root_logger = logging.getLogger()
     previous_level = root_logger.level
     root_logger.setLevel(logging.WARNING)
+    set_suppress_info_events(True)
 
     console = Console(stderr=True)
     progress = Progress(
@@ -93,6 +94,7 @@ def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:
         yield _on_progress
     finally:
         progress.stop()
+        set_suppress_info_events(False)
         root_logger.setLevel(previous_level)
 
 
