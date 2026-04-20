@@ -16,6 +16,15 @@ from typing import Any, Final, cast
 
 TARGET_TOKENS: Final[int] = 400
 OVERLAP_TOKENS: Final[int] = 50
+# Hard ceiling per chunk. BGE-M3 truncates above 8192 tokens silently, which
+# means any logic past that cut never makes it into the embedding — zero recall
+# on queries matching that zone. We pick 2000 to leave headroom while keeping
+# blocks large enough to preserve semantic context.
+MAX_TOKENS: Final[int] = 2000
+
+# Bumped whenever the chunker output can change for the same input. Stored per
+# procedure in the metadata DB; the indexer re-chunks+re-embeds when it drifts.
+CHUNKER_VERSION: Final[int] = 1
 
 _DEFAULT_TOKENIZER_MODEL: Final[str] = "BAAI/bge-m3"
 _ENV_TOKENIZER_MODEL: Final[str] = "NZ_WORKBENCH_TOKENIZER_MODEL"
@@ -474,12 +483,95 @@ def _stitch(segments: list[_Segment], target_tokens: int, overlap_tokens: int) -
     return chunks
 
 
+def _hard_split_text(text: str, max_tokens: int) -> list[str]:
+    """Split text into pieces each tokenizing to ≤ ``max_tokens``.
+
+    Prefers whitespace cuts near the estimated token-ratio target; falls back
+    to character slicing if whitespace boundaries don't converge. Guarantees
+    termination and progress: every iteration consumes ≥ 1 character.
+    """
+
+    if _count_tokens(text) <= max_tokens:
+        return [text]
+
+    pieces: list[str] = []
+    remaining = text
+
+    while _count_tokens(remaining) > max_tokens:
+        total_tokens = _count_tokens(remaining)
+        ratio = len(remaining) / max(1, total_tokens)
+        # Target char index leaving a 10% safety margin below max_tokens.
+        cut = max(1, int(max_tokens * ratio * 0.9))
+        cut = min(cut, len(remaining) - 1)
+
+        # Prefer a whitespace boundary within the second half of the estimate
+        # so we don't shrink chunks dramatically hunting for whitespace.
+        back = cut
+        min_back = max(1, cut // 2)
+        while back > min_back and not remaining[back].isspace():
+            back -= 1
+        if remaining[back : back + 1].isspace():
+            cut = back
+
+        # Guarantee the left half is under the ceiling; shrink if tokenization
+        # came out above estimate.
+        while cut > 1 and _count_tokens(remaining[:cut]) > max_tokens:
+            cut = max(1, int(cut * 0.9))
+
+        if cut <= 0:
+            break
+
+        pieces.append(remaining[:cut])
+        remaining = remaining[cut:]
+
+    if remaining:
+        pieces.append(remaining)
+    return pieces
+
+
+def _enforce_chunk_ceiling(chunks: list[Chunk], max_tokens: int) -> list[Chunk]:
+    """Post-processing guard: split any chunk whose text exceeds ``max_tokens``.
+
+    The upstream logical/semicolon-aware splitter can leave oversized chunks
+    when a single statement has no top-level whitespace breakpoints (rare but
+    real). This safety net guarantees the invariant without requiring the
+    upstream logic to be perfect.
+    """
+
+    out: list[Chunk] = []
+    for ch in chunks:
+        if _count_tokens(ch.text) <= max_tokens:
+            out.append(ch)
+            continue
+        for piece in _hard_split_text(ch.text, max_tokens):
+            out.append(
+                Chunk(
+                    text=piece,
+                    line_from=ch.line_from,
+                    line_to=ch.line_to,
+                    section_hint=ch.section_hint,
+                )
+            )
+    return out
+
+
 def chunk(body: str) -> list[Chunk]:
     """Return the chunks of a procedure body."""
 
     segments = _segment(body)
+    # ``_split_oversized_segments`` caps each segment near ``OVERLAP_TOKENS`` so
+    # the stitch step's overlap loop can back up cleanly in small units; the
+    # hard guarantee against BGE-M3 truncation comes from ``_enforce_chunk_ceiling``.
     segments = _split_oversized_segments(segments, max_tokens=OVERLAP_TOKENS)
-    return _stitch(segments, TARGET_TOKENS, OVERLAP_TOKENS)
+    chunks = _stitch(segments, TARGET_TOKENS, OVERLAP_TOKENS)
+    return _enforce_chunk_ceiling(chunks, MAX_TOKENS)
 
 
-__all__ = ["OVERLAP_TOKENS", "TARGET_TOKENS", "Chunk", "chunk"]
+__all__ = [
+    "CHUNKER_VERSION",
+    "MAX_TOKENS",
+    "OVERLAP_TOKENS",
+    "TARGET_TOKENS",
+    "Chunk",
+    "chunk",
+]

@@ -17,6 +17,12 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) y el p
 ### Fixed
 - ES: `_progress_context` ahora silencia también los eventos INFO de structlog mediante un procesador controlado por `set_suppress_info_events`. Antes solo bajaba el root logger, que no afectaba a structlog por usar `PrintLoggerFactory` directo — los eventos `kb_index_proc_start/done` seguían rompiendo la animación de la barra Rich.
 - EN: `_progress_context` now silences structlog INFO events too via a processor driven by `set_suppress_info_events`. Previously only the root stdlib logger was lowered, which had no effect on structlog (goes through `PrintLoggerFactory` directly) — events like `kb_index_proc_start/done` kept shredding the Rich bar animation.
+- ES: `chunker.chunk` garantiza que todos los chunks tienen ≤ `MAX_TOKENS` (2000) mediante un corte duro post-stitch. Antes, procedures con bloques monolíticos sin semicolons top-level podían generar chunks > 8192 tokens, que BGE-M3 truncaba silenciosamente y dejaba la cola de la SP sin representación en el embedding (recall cero para búsquedas en esa zona).
+- EN: `chunker.chunk` now guarantees every chunk is ≤ `MAX_TOKENS` (2000) via a post-stitch hard ceiling. Before, procedures with monolithic blocks and no top-level semicolons could yield chunks > 8192 tokens, which BGE-M3 silently truncates — tail content had zero embedding representation and was invisible to semantic search.
+
+### Added
+- ES: `CHUNKER_VERSION` persistido en `procedure.chunker_version` (migración automática para DBs legacy). El indexer re-chunka/re-embedda cuando la versión almacenada no coincide con la actual, aunque `body_sha256` sea el mismo. Así un bump del chunker dispara re-index sin requerir `--force` manual.
+- EN: `CHUNKER_VERSION` persisted in `procedure.chunker_version` (auto-migrates legacy DBs). The indexer re-chunks/re-embeds when the stored version doesn't match the current one, even if `body_sha256` is unchanged — a chunker bump triggers re-index without requiring manual `--force`.
 
 ### Fixed
 - ES: `NzMcpClient.call()` ahora desenvuelve el envelope MCP de `tools/call` (lee `structuredContent.result`) y mapea errores estructurados; incluye fallback a JSON en bloques `content`.

@@ -47,6 +47,7 @@ class _FakeMetadataStore:
         self.path: Path = path
         self.body_sha: dict[tuple[str, str, str, str], str] = {}
         self.last_alt: dict[tuple[str, str, str, str], str] = {}
+        self.chunker_ver: dict[tuple[str, str, str, str], int] = {}
         self._dbs: set[str] = set()
 
     def ensure_schema(self) -> None:
@@ -55,11 +56,21 @@ class _FakeMetadataStore:
     def get_body_sha256(self, key: ProcedureKey) -> str | None:
         return self.body_sha.get((key.database, key.schema, key.name, key.signature))
 
+    def get_chunker_version(self, key: ProcedureKey) -> int | None:
+        return self.chunker_ver.get((key.database, key.schema, key.name, key.signature))
+
     def get_last_altered(self, key: ProcedureKey) -> str | None:
         return self.last_alt.get((key.database, key.schema, key.name, key.signature))
 
-    def upsert_procedure(self, key: ProcedureKey, last_altered: str, body_sha256: str) -> None:
+    def upsert_procedure(
+        self,
+        key: ProcedureKey,
+        last_altered: str,
+        body_sha256: str,
+        chunker_version: int = 0,
+    ) -> None:
         self.body_sha[(key.database, key.schema, key.name, key.signature)] = body_sha256
+        self.chunker_ver[(key.database, key.schema, key.name, key.signature)] = chunker_version
         if last_altered:
             self.last_alt[(key.database, key.schema, key.name, key.signature)] = last_altered
         self._dbs.add(key.database)
@@ -324,6 +335,63 @@ def test_refresh_one_indexes_and_then_skips_by_body_hash(
     last_event = events[-1]
     assert last_event["skipped"] is True
     assert last_event["indexed"] is not True
+
+
+@pytest.mark.unit
+def test_refresh_one_reindexes_when_chunker_version_drifts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Same DDL body + older chunker_version → re-index (not skipped).
+
+    Simulates a stored-state migration: user ran bootstrap with chunker v0
+    (pre-versioning), we bumped the chunker, next refresh must re-chunk the
+    same body even though its ``body_sha256`` matches.
+    """
+
+    fake_meta = _FakeMetadataStore(tmp_path / "metadata.sqlite")
+    fake_client = _FakeNzMcpClient(bin_path="nz-mcp")
+
+    def _meta_factory(_p: Path) -> _FakeMetadataStore:
+        return fake_meta
+
+    def _chroma_factory(root: Path) -> _FakeChromaStore:
+        return _FakeChromaStore(root)
+
+    def _client_factory(*, bin_path: str) -> _FakeNzMcpClient:
+        assert bin_path
+        return fake_client
+
+    monkeypatch.setattr(
+        indexer,
+        "load_config",
+        lambda: _Cfg(state_dir=tmp_path, nz_mcp_bin="nz-mcp", embedder_model="BAAI/bge-m3"),
+    )
+    monkeypatch.setattr(indexer, "MetadataStore", _meta_factory)
+    monkeypatch.setattr(indexer, "ChromaStore", _chroma_factory)
+    monkeypatch.setattr(indexer, "NzMcpClient", _client_factory)
+    monkeypatch.setattr(indexer, "make_embedder", lambda _name: _FakeEmbedder())
+    monkeypatch.setattr(
+        indexer,
+        "chunk",
+        lambda _ddl: [
+            type("C", (), {"text": "x", "line_from": 1, "line_to": 1, "section_hint": "body"})()
+        ],
+    )
+
+    # First pass indexes at the current chunker version.
+    r1 = indexer.refresh_one("PROD_X", "DBO", "SP1")
+    assert r1.procedures_indexed == 1
+    assert fake_client.get_ddl_calls == 1
+
+    # Simulate an older chunker having indexed this row (e.g. pre-migration).
+    key = ProcedureKey(database="PROD_X", schema="DBO", name="SP1", signature="()")
+    fake_meta.chunker_ver[(key.database, key.schema, key.name, key.signature)] = 0
+
+    # Second pass: body hash still matches but chunker_version drifted → re-index.
+    r2 = indexer.refresh_one("PROD_X", "DBO", "SP1")
+    assert r2.procedures_indexed == 1, "stale chunker_version must trigger re-index"
+    assert r2.procedures_skipped == 0
+    assert fake_client.get_ddl_calls == 2
 
 
 @pytest.mark.unit
