@@ -1,0 +1,113 @@
+name: Validate conventions
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  branch-name:
+    name: Branch name
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate branch name
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: python scripts/check_branch_name.py
+
+  pr-title:
+    name: PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: python scripts/check_pr_title.py
+
+  pr-body-refs:
+    name: PR body has Closes/Refs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for Closes/Refs
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if ! echo "$PR_BODY" | grep -Eq '(Closes|Refs) #[0-9]+'; then
+            echo "PR body must include 'Closes #<n>' or 'Refs #<n>'." >&2
+            exit 1
+          fi
+
+  pr-body-structure:
+    name: PR body structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate required template headings
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python scripts/check_pr_body.py
+
+  commit-subjects:
+    name: Commit subjects
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate every commit subject in PR
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python - <<'PY'
+          import os, re, subprocess, sys
+
+          regex = re.compile(
+              r"^(feat|fix|chore|refactor|docs|test|security|perf|build|ci|ren)"
+              r"(\([a-z0-9-]+\))?(!)?: [^\s].{0,71}$"
+          )
+          base = os.environ["PR_BASE"]
+          head = os.environ["PR_HEAD"]
+          result = subprocess.run(
+              ["git", "log", "--format=%H%x09%s", f"{base}..{head}"],
+              check=True, capture_output=True, text=True,
+          )
+          failed = []
+          for line in result.stdout.splitlines():
+              sha, subj = line.split("\t", 1)
+              if subj.startswith(("Merge ", "Revert ", "fixup!", "squash!")):
+                  continue
+              if not regex.match(subj):
+                  failed.append((sha[:8], subj))
+          if failed:
+              for sha, subj in failed:
+                  print(f"::error::commit {sha}: subject {subj!r} no cumple regex.")
+              sys.exit(1)
+          PY
+
+  repo-hygiene:
+    name: Repo hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate repo hygiene
+        run: python scripts/check_repo_hygiene.py

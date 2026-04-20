@@ -1,0 +1,36 @@
+# REN <N> — analysis
+# Produced by the analyzer. Reviewed by the human. Drives the manifest.
+
+ren: <N>
+analyzed_at: <ISO date>
+
+# Candidate procedures that should be touched.
+procedures_affected:
+  - name: <PROD_DB.SCHEMA.SP>
+    confidence: 0.0   # 0.0–1.0
+    reason: "<why the AI thinks this SP is involved>"
+
+# Atomic units of work. Each change point is one surgical edit.
+change_points:
+  - id: 1
+    summary: "<one line>"
+    procedures:
+      - sp: <PROD_DB.SCHEMA.SP>
+        sections:
+          - line_from: 0
+            line_to: 0
+            preview: |
+              <first lines of the section>
+    # REN source location (section / paragraph in the REN doc):
+    ren_reference: "<where in source.md this change was described>"
+    # Uncertainty flags — if any is true, this change point must go through clarifications.md
+    ambiguity_flags: []   # e.g. ["missing_schema", "no_literal_match", "multiple_candidates"]
+
+# External dependencies the REN requires us to add or modify that are not in any SP today.
+new_objects:
+  tables: []
+  columns: []
+  procedures: []
+
+# Side effect patterns detected in candidate SPs that must be resolved.
+side_effects_detected: []

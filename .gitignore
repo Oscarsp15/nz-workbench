@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+*.egg
+dist/
+build/
+.tox/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Local state (knowledge base, caches) — never committed
+.nz-workbench/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+chroma/
+cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Credentials — never commit
+*.env
+.env
+.env.local
+profiles.toml
+credentials.json
+secrets/
+
+# Generated / temporary
+*.log
+*.tmp
+*.bak
+
+# ─────────────────────────────────────────────────────────────────
+# Private company data — NEVER committed to this public repo
+# ─────────────────────────────────────────────────────────────────
+# User-specific REN folders (business content, internal procedure names, etc.)
+ren/REN_*
+
+# User-specific procedure knowledge (real SP names and business logic)
+docs/procedures/*
+!docs/procedures/_TEMPLATE.md
+!docs/procedures/.gitkeep
+
+# User-specific learning log and accumulated decisions
+docs/learning-log.md
+docs/technical-decisions.md
+docs/side-effects-catalog.md
+
+# Re-include the public starter templates
+!docs/learning-log.md.template
+!docs/technical-decisions.md.template
+!docs/side-effects-catalog.md.template

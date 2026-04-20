@@ -1,0 +1,40 @@
+# REN <N> — migration manifest
+# The contract of what gets cloned under what names.
+
+ren: <N>
+suffix: "_<N>"    # appended to write targets listed below
+
+# Procedures to clone. Each entry: source + target identity.
+procedures:
+  - source:
+      database: <PROD_DB>
+      schema: <SCHEMA>
+      name: <SP>
+      signature: "(<args>)"
+    target:
+      database: <DESA_DB>
+      schema: <SCHEMA>
+      name: <SP>_<N>
+
+# Tables that receive the REN suffix when they are the target of a WRITE operation
+# (INSERT, UPDATE, DELETE, permanent CREATE) inside a cloned procedure.
+# Reads from these tables are NOT modified.
+tables_to_clone: []
+#  - PROD_<DB>.<SCHEMA>.<TABLE>
+
+# Procedures that, when CALLed from inside a cloned SP, should have the REN suffix
+# appended to their name (because they are also being cloned).
+procedures_to_call_with_suffix: []
+#  - PROD_<DB>.<SCHEMA>.<OTHER_SP>
+
+# Per-REN overrides of the side-effects catalog.
+# Default actions from docs/side-effects-catalog.md apply unless listed here.
+side_effects_overrides: []
+#  - pattern: "CALL PROD_MAESTROBI.DBO.MAIL_ENVIO_*"
+#    action: redirect_to
+#    arg: oscar.sirlopu@e2e.pe
+#    reason: "Need to verify the new email layout for this REN"
+
+# Parameter set used for baseline and comparison tests.
+test_parameters:
+  # P_FECCORTE: '2026-03-31'

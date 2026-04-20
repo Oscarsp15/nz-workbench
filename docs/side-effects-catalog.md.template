@@ -1,0 +1,37 @@
+# Side effects catalog
+
+When cloning a procedure to `DESA_*`, some statements must be altered to prevent unintended effects in production systems (email sends, external notifications, downstream triggers). This catalog maps patterns to default actions.
+
+## Actions supported
+
+| Action | Effect in the cloned procedure |
+|---|---|
+| `comment_out` | The statement is wrapped in a block comment so it does not execute. |
+| `redirect_to(<arg>)` | For email-like side effects: the recipient is replaced with `<arg>` (an email address). |
+| `keep` | The statement is preserved as-is. Used for inocuous audit tables and logs. |
+
+## Policy
+
+1. The AI never assigns an action to a newly discovered pattern without asking the human.
+2. Once a pattern has a default action in this catalog, subsequent matches apply it automatically.
+3. A specific REN may override the default via `manifest.yaml → side_effects_overrides`.
+
+## Catalog
+
+| Pattern | Default action | Default arg | Notes |
+|---|---|---|---|
+| <!-- no entries yet --> | | | |
+
+## Per-REN overrides
+
+Overrides are per-REN, declared in `ren/REN_<N>/manifest.yaml`. Example:
+
+```yaml
+side_effects_overrides:
+  - pattern: "CALL PROD_MAESTROBI.DBO.MAIL_ENVIO_*"
+    action: redirect_to
+    arg: oscar.sirlopu@e2e.pe
+    reason: "Need to verify the new email layout for this REN"
+```
+
+Overrides only apply for the given REN. The catalog remains unchanged.

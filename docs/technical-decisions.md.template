@@ -1,0 +1,29 @@
+# Technical decisions (cross-REN knowledge)
+
+Reusable technical lessons accumulated across RENs. Each entry is short, general, and applies beyond the REN where it was first observed.
+
+Contrast with `ren/REN_<N>/decisions.md`: that file holds REN-specific choices ("for this REN I chose subquery because the user X asked Y"). This file holds patterns that apply everywhere ("NPS 11.x syntax quirk Z", "BGE-M3 chunk size sweet spot").
+
+## Format
+
+Each entry has:
+
+- A short title.
+- Date first observed.
+- Context (1-2 lines).
+- Decision / pattern (what we do).
+- Applies to (when this lesson is relevant).
+
+## Entries
+
+<!-- Template to append:
+
+### <Short title>
+
+- **Observed**: YYYY-MM-DD
+- **Context**: <what was the situation>
+- **Pattern / Decision**: <what we learned to do>
+- **Applies to**: <when this is relevant>
+-->
+
+_No entries yet. First REN will populate._
