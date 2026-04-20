@@ -32,11 +32,28 @@ ProgressEvent = dict[str, Any]
 
 Shapes (``stage`` is always present):
 
-- ``{"stage": "total_update", "total": int}`` — total discovered so far.
+- ``{"stage": "total_update", "total": int}`` — total work units discovered so
+  far. Work units default to the sum of ``size_bytes`` across procedures so
+  that a huge SP advances the bar proportionally; when size is missing each
+  proc counts as ``1`` (falls back to count-based progress).
 - ``{"stage": "proc_start", "database": str, "schema": str, "name": str}``.
 - ``{"stage": "proc_done", "database": str, "schema": str, "name": str,
-     "chunks": int, "indexed": bool, "skipped": bool, "error": str | None}``.
+     "chunks": int, "indexed": bool, "skipped": bool, "error": str | None,
+     "work_units": int}``. ``work_units`` is the size that should advance the
+  bar for this procedure.
 """
+
+
+def _work_units(proc: _ProcInfo) -> int:
+    """How much progress this procedure contributes.
+
+    Use ``size_bytes`` when known so the bar advances by bytes (stable ETA for
+    mixed procedure sizes); fall back to ``1`` so progress remains count-based
+    if nz-mcp doesn't return sizes.
+    """
+
+    return proc.size_bytes if proc.size_bytes and proc.size_bytes > 0 else 1
+
 
 ProgressCallback = Callable[[ProgressEvent], None]
 
@@ -192,6 +209,7 @@ def _index_procedures(
             name=proc.name,
             signature=proc.signature,
         )
+        work_units = _work_units(proc)
         if on_progress is not None:
             on_progress(
                 {
@@ -204,7 +222,15 @@ def _index_procedures(
 
         if proc.last_altered:
             prev_last = metadata.get_last_altered(key)
-            if prev_last is not None and prev_last == proc.last_altered:
+            prev_chunker = metadata.get_chunker_version(key)
+            # Skip only when BOTH the source hasn't changed AND the chunker
+            # version matches. A chunker bump invalidates the local index,
+            # so we must fall through to ``_index_one`` for a fresh pass.
+            if (
+                prev_last is not None
+                and prev_last == proc.last_altered
+                and prev_chunker == CHUNKER_VERSION
+            ):
                 skipped += 1
                 if on_progress is not None:
                     on_progress(
@@ -217,6 +243,7 @@ def _index_procedures(
                             "indexed": False,
                             "skipped": True,
                             "error": None,
+                            "work_units": work_units,
                         }
                     )
                 continue
@@ -248,6 +275,7 @@ def _index_procedures(
                         "indexed": False,
                         "skipped": False,
                         "error": err,
+                        "work_units": work_units,
                     }
                 )
             continue
@@ -278,6 +306,7 @@ def _index_procedures(
                     "indexed": bool(did_index),
                     "skipped": is_skipped,
                     "error": None,
+                    "work_units": work_units,
                 }
             )
 
@@ -496,7 +525,7 @@ def bootstrap(
                     procs.sort(key=lambda p: p.size_bytes or 0, reverse=True)
                     procs = procs[:top_n]
 
-                total_discovered += len(procs)
+                total_discovered += sum(_work_units(p) for p in procs)
                 if on_progress is not None:
                     on_progress({"stage": "total_update", "total": total_discovered})
 
@@ -599,6 +628,7 @@ def refresh_one(
                     "indexed": indexed == 1,
                     "skipped": indexed == 0 and err is None,
                     "error": err,
+                    "work_units": 1,
                 }
             )
     finally:
