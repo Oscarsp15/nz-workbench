@@ -83,15 +83,28 @@ class _FakeNzMcpClient:
         return
 
     def call(self, tool: str, arguments: dict[str, Any]) -> ToolResult:
+        if tool == "nz_list_schemas":
+            return ToolResult(
+                ok=True,
+                result={"schemas": [{"name": "DBO"}]},
+                error_code=None,
+                error_context=None,
+            )
         if tool == "nz_list_procedures":
+            if "schema" not in arguments:
+                return ToolResult(
+                    ok=False,
+                    result=None,
+                    error_code="INVALID_INPUT",
+                    error_context={"detail": "schema required"},
+                )
             return ToolResult(
                 ok=True,
                 result={
                     "procedures": [
                         {
-                            "schema": "DBO",
                             "name": "SP1",
-                            "signature": "()",
+                            "arguments": "()",
                             "last_altered": "2026-01-01T00:00:00Z",
                             "size_bytes": 10,
                         }
