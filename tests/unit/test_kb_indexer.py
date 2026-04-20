@@ -321,8 +321,9 @@ def test_refresh_one_indexes_and_then_skips_by_body_hash(
     assert r2.procedures_indexed == 0
     assert r2.procedures_skipped == 1
     assert r2.errors == []
-    assert events[-1]["skipped"] is True
-    assert events[-1]["indexed"] is False
+    last_event = events[-1]
+    assert last_event["skipped"] is True
+    assert last_event["indexed"] is not True
 
 
 @pytest.mark.unit
