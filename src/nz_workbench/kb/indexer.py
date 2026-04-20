@@ -22,7 +22,6 @@ _log = structlog.get_logger(__name__)
 
 _TOOL_LIST_PROCS: Final[str] = "nz_list_procedures"
 _TOOL_GET_DDL: Final[str] = "nz_get_procedure_ddl"
-_TOOL_ANALYZE_REFS: Final[str] = "nz_analyze_procedure_references"
 _TOOL_LIST_SCHEMAS: Final[str] = "nz_list_schemas"
 _QUAL_DB_SCHEMA_OBJ: Final[int] = 3
 _QUAL_SCHEMA_OBJ: Final[int] = 2
@@ -366,35 +365,6 @@ def _fallback_regex_references(ddl: str) -> list[Reference]:
     return refs
 
 
-def _extract_references(res: ToolResult) -> list[Reference]:
-    if not _tool_ok(res) or res.result is None:
-        return []
-    raw = res.result.get("references") or res.result.get("refs")
-    if not isinstance(raw, list):
-        return []
-    refs: list[Reference] = []
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        kind = item.get("kind")
-        if kind not in {"read", "write", "call"}:
-            continue
-        refs.append(
-            Reference(
-                kind=kind,
-                op=str(item.get("op") or ""),
-                ref_database=item.get("ref_database"),
-                ref_schema=item.get("ref_schema"),
-                ref_object=str(item.get("ref_object") or ""),
-                line_from=int(item["line_from"])
-                if isinstance(item.get("line_from"), int)
-                else None,
-                line_to=int(item["line_to"]) if isinstance(item.get("line_to"), int) else None,
-            )
-        )
-    return refs
-
-
 def _index_one(
     *,
     client: NzMcpClient,
@@ -466,19 +436,10 @@ def _index_one(
 
     chroma.upsert(ids=ids, vectors=vectors, metadatas=metadatas, documents=documents)
 
-    ref_res = _call_with_fallbacks(
-        client,
-        _TOOL_ANALYZE_REFS,
-        [
-            {"database": proc.database, "schema": proc.schema, "procedure": proc.name},
-            {"database": proc.database, "schema": proc.schema, "name": proc.name},
-            {"ddl": ddl},
-            {"body": ddl},
-        ],
-    )
-    references = _extract_references(ref_res)
-    if not references:
-        references = _fallback_regex_references(ddl)
+    # nz-mcp doesn't expose a reference-analysis tool today; regex extraction
+    # over the DDL covers the structural queries we need (writers, callers).
+    # If a semantic analyzer lands in nz-mcp later, re-introduce the call here.
+    references = _fallback_regex_references(ddl)
 
     metadata.upsert_procedure(
         key,
