@@ -36,6 +36,81 @@ class ToolResult:
     error_context: dict[str, Any] | None
 
 
+def _tool_error(code: str | None, context: Any) -> ToolResult:
+    ctx = context if isinstance(context, dict) else None
+    return ToolResult(
+        ok=False,
+        result=None,
+        error_code=str(code) if code is not None else None,
+        error_context=ctx,
+    )
+
+
+def _parse_text_content_json(content: Any) -> dict[str, Any] | None:
+    if not isinstance(content, list):
+        return None
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _unwrap_tool_payload(tool_payload: dict[str, Any], *, is_error: bool) -> ToolResult:
+    if isinstance(tool_payload.get("error"), dict):
+        err_obj = tool_payload["error"]
+        return _tool_error(err_obj.get("code") or "TOOL_ERROR", err_obj.get("context"))
+
+    if isinstance(tool_payload.get("result"), dict):
+        return ToolResult(
+            ok=True, result=tool_payload["result"], error_code=None, error_context=None
+        )
+
+    if is_error:
+        return _tool_error("TOOL_ERROR", None)
+
+    return ToolResult(ok=True, result=tool_payload, error_code=None, error_context=None)
+
+
+def _unwrap_tool_call_envelope(envelope: dict[str, Any]) -> ToolResult:
+    looks_like_mcp_envelope = any(
+        key in envelope for key in ("content", "structuredContent", "isError")
+    )
+    if not looks_like_mcp_envelope:
+        return _unwrap_tool_payload(envelope, is_error=False)
+
+    # MCP tools/call wraps tool output in:
+    # {"content": [...], "structuredContent": {...}, "isError": bool}
+    is_error = bool(envelope.get("isError"))
+    structured = envelope.get("structuredContent")
+
+    tool_payload: dict[str, Any] | None = None
+    if isinstance(structured, dict):
+        if isinstance(structured.get("result"), dict):
+            tool_payload = structured["result"]
+        elif isinstance(structured.get("error"), dict):
+            tool_payload = {"error": structured["error"]}
+        else:
+            tool_payload = structured
+    else:
+        tool_payload = _parse_text_content_json(envelope.get("content"))
+
+    if tool_payload is None:
+        tool_payload = {}
+
+    return _unwrap_tool_payload(tool_payload, is_error=is_error)
+
+
 class NzMcpClient:
     """Connects to ``nz-mcp serve`` as a subprocess via stdio JSON-RPC."""
 
@@ -123,13 +198,11 @@ class NzMcpClient:
                 error_context=data,
             )
 
-        result = payload.get("result")
-        # We expect tool implementations to return a JSON object.
-        if isinstance(result, dict):
-            return ToolResult(ok=True, result=result, error_code=None, error_context=None)
-        if result is None:
+        envelope = payload.get("result")
+        if not isinstance(envelope, dict):
             return ToolResult(ok=True, result={}, error_code=None, error_context=None)
-        return ToolResult(ok=True, result={"result": result}, error_code=None, error_context=None)
+
+        return _unwrap_tool_call_envelope(envelope)
 
     # ----- JSON-RPC helpers -----
     def _stdin(self) -> IO[str]:
