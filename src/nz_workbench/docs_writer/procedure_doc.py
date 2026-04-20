@@ -39,4 +39,4 @@ def append_change_log(path: Path, entry_md: str) -> None:
     raise NotImplementedError
 
 
-__all__ = ["ProcedureDoc", "read_doc", "write_doc", "append_change_log"]
+__all__ = ["ProcedureDoc", "append_change_log", "read_doc", "write_doc"]
