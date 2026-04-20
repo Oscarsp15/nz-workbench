@@ -41,4 +41,3 @@ def test_embedder_raises_if_sentence_transformers_missing(monkeypatch: pytest.Mo
             e.embed(["x"])
     finally:
         embedder._SENTENCE_TRANSFORMER = original
-

@@ -24,4 +24,3 @@ def test_errors_render_codes() -> None:
 def test_mcp_server_is_stub_but_configures_logging() -> None:
     with pytest.raises(NotImplementedError):
         run_stdio_server()
-

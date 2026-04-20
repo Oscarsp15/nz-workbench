@@ -47,4 +47,3 @@ def test_extract_references_parses_tool_payload() -> None:
     assert len(refs) == 1
     assert refs[0].kind == "read"
     assert refs[0].ref_schema == "DBO"
-

@@ -36,6 +36,7 @@ def _parse_csv(value: str) -> list[str]:
 
 def _print_index_report(title: str, report: kb_indexer.IndexReport) -> None:
     console = Console()
+    emit = console.print
     table = Table(title=title)
     table.add_column("Procedures indexed", justify="right")
     table.add_column("Procedures skipped", justify="right")
@@ -47,12 +48,12 @@ def _print_index_report(title: str, report: kb_indexer.IndexReport) -> None:
         str(report.chunks_written),
         f"{report.duration_seconds:.2f}",
     )
-    console.print(table)
+    emit(table)
 
     if report.errors:
-        console.print("\nErrors:")
+        emit("\nErrors:")
         for err in report.errors:
-            console.print(f"- {err}")
+            emit(f"- {err}")
 
 
 @app.command("version")

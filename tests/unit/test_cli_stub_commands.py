@@ -47,4 +47,3 @@ def test_serve_command_is_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("nz_workbench.cli.configure_logging_for_stdio", lambda: None)
     res = runner.invoke(app, ["serve"])
     assert res.exit_code != 0
-
