@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -25,6 +26,20 @@ _TOOL_ANALYZE_REFS: Final[str] = "nz_analyze_procedure_references"
 _TOOL_LIST_SCHEMAS: Final[str] = "nz_list_schemas"
 _QUAL_DB_SCHEMA_OBJ: Final[int] = 3
 _QUAL_SCHEMA_OBJ: Final[int] = 2
+
+
+ProgressEvent = dict[str, Any]
+"""Event payload passed to ``on_progress`` callbacks.
+
+Shapes (``stage`` is always present):
+
+- ``{"stage": "total_update", "total": int}`` — total discovered so far.
+- ``{"stage": "proc_start", "database": str, "schema": str, "name": str}``.
+- ``{"stage": "proc_done", "database": str, "schema": str, "name": str,
+     "chunks": int, "indexed": bool, "skipped": bool, "error": str | None}``.
+"""
+
+ProgressCallback = Callable[[ProgressEvent], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +179,7 @@ def _index_procedures(
     chroma: ChromaStore,
     metadata: MetadataStore,
     embedder: Embedder,
+    on_progress: ProgressCallback | None = None,
 ) -> tuple[int, int, int, list[str]]:
     indexed = 0
     skipped = 0
@@ -177,10 +193,33 @@ def _index_procedures(
             name=proc.name,
             signature=proc.signature,
         )
+        if on_progress is not None:
+            on_progress(
+                {
+                    "stage": "proc_start",
+                    "database": proc.database,
+                    "schema": proc.schema,
+                    "name": proc.name,
+                }
+            )
+
         if proc.last_altered:
             prev_last = metadata.get_last_altered(key)
             if prev_last is not None and prev_last == proc.last_altered:
                 skipped += 1
+                if on_progress is not None:
+                    on_progress(
+                        {
+                            "stage": "proc_done",
+                            "database": proc.database,
+                            "schema": proc.schema,
+                            "name": proc.name,
+                            "chunks": 0,
+                            "indexed": False,
+                            "skipped": True,
+                            "error": None,
+                        }
+                    )
                 continue
 
         _log.info(
@@ -199,12 +238,28 @@ def _index_procedures(
         if err is not None:
             errors.append(err)
             _log.error("kb_index_proc_failed", error=err)
+            if on_progress is not None:
+                on_progress(
+                    {
+                        "stage": "proc_done",
+                        "database": proc.database,
+                        "schema": proc.schema,
+                        "name": proc.name,
+                        "chunks": 0,
+                        "indexed": False,
+                        "skipped": False,
+                        "error": err,
+                    }
+                )
             continue
-        if did_index == 0:
+
+        is_skipped = did_index == 0
+        if is_skipped:
             skipped += 1
         else:
             indexed += 1
             chunks_written += chunks
+
         _log.info(
             "kb_index_proc_done",
             database=proc.database,
@@ -213,6 +268,19 @@ def _index_procedures(
             chunks=chunks,
             indexed=bool(did_index),
         )
+        if on_progress is not None:
+            on_progress(
+                {
+                    "stage": "proc_done",
+                    "database": proc.database,
+                    "schema": proc.schema,
+                    "name": proc.name,
+                    "chunks": chunks,
+                    "indexed": bool(did_index),
+                    "skipped": is_skipped,
+                    "error": None,
+                }
+            )
 
     return indexed, skipped, chunks_written, errors
 
@@ -413,14 +481,24 @@ def _index_one(
     return 1, len(chunks), None
 
 
-def bootstrap(databases: list[str], top_n: int | None = None) -> IndexReport:
-    """Index all (or top-N) procedures in the given PROD databases."""
+def bootstrap(
+    databases: list[str],
+    top_n: int | None = None,
+    *,
+    on_progress: ProgressCallback | None = None,
+) -> IndexReport:
+    """Index all (or top-N) procedures in the given PROD databases.
+
+    ``on_progress`` is invoked with dict events (see ``ProgressEvent``) so callers
+    can render a CLI progress bar or telemetry without the indexer caring how.
+    """
 
     t0 = time.perf_counter()
     errors: list[str] = []
     procedures_indexed = 0
     procedures_skipped = 0
     chunks_written = 0
+    total_discovered = 0
 
     cfg = load_config()
     metadata = MetadataStore(cfg.state_dir / "metadata.sqlite")
@@ -447,12 +525,17 @@ def bootstrap(databases: list[str], top_n: int | None = None) -> IndexReport:
                     procs.sort(key=lambda p: p.size_bytes or 0, reverse=True)
                     procs = procs[:top_n]
 
+                total_discovered += len(procs)
+                if on_progress is not None:
+                    on_progress({"stage": "total_update", "total": total_discovered})
+
                 newly_indexed, newly_skipped, newly_chunks, proc_errors = _index_procedures(
                     procs=procs,
                     client=client,
                     chroma=chroma,
                     metadata=metadata,
                     embedder=embedder,
+                    on_progress=on_progress,
                 )
                 procedures_indexed += newly_indexed
                 procedures_skipped += newly_skipped
@@ -477,7 +560,13 @@ def bootstrap(databases: list[str], top_n: int | None = None) -> IndexReport:
     )
 
 
-def refresh_one(database: str, schema: str, procedure: str) -> IndexReport:
+def refresh_one(
+    database: str,
+    schema: str,
+    procedure: str,
+    *,
+    on_progress: ProgressCallback | None = None,
+) -> IndexReport:
     """Re-index a single procedure when its source changed in PROD."""
 
     t0 = time.perf_counter()
@@ -504,6 +593,16 @@ def refresh_one(database: str, schema: str, procedure: str) -> IndexReport:
             last_altered="",
             size_bytes=None,
         )
+        if on_progress is not None:
+            on_progress({"stage": "total_update", "total": 1})
+            on_progress(
+                {
+                    "stage": "proc_start",
+                    "database": database,
+                    "schema": schema,
+                    "name": procedure,
+                }
+            )
         indexed, chunks, err = _index_one(
             client=client,
             chroma=chroma,
@@ -518,6 +617,19 @@ def refresh_one(database: str, schema: str, procedure: str) -> IndexReport:
         else:
             procedures_indexed = 1
             chunks_written = chunks
+        if on_progress is not None:
+            on_progress(
+                {
+                    "stage": "proc_done",
+                    "database": database,
+                    "schema": schema,
+                    "name": procedure,
+                    "chunks": chunks,
+                    "indexed": indexed == 1,
+                    "skipped": indexed == 0 and err is None,
+                    "error": err,
+                }
+            )
     finally:
         client.stop()
 
@@ -530,7 +642,7 @@ def refresh_one(database: str, schema: str, procedure: str) -> IndexReport:
     )
 
 
-def refresh_cron() -> IndexReport:
+def refresh_cron(*, on_progress: ProgressCallback | None = None) -> IndexReport:
     """Scan ``_V_PROCEDURE.LASTALTERTIME`` and re-index changed procedures (best-effort).
 
     Requires that procedures have been bootstrapped before, so the local metadata
@@ -552,7 +664,7 @@ def refresh_cron() -> IndexReport:
             errors=["no indexed databases found; run kb-bootstrap first"],
         )
 
-    report = bootstrap(databases, top_n=None)
+    report = bootstrap(databases, top_n=None, on_progress=on_progress)
     return IndexReport(
         procedures_indexed=report.procedures_indexed,
         procedures_skipped=report.procedures_skipped,
@@ -562,4 +674,11 @@ def refresh_cron() -> IndexReport:
     )
 
 
-__all__ = ["IndexReport", "bootstrap", "refresh_cron", "refresh_one"]
+__all__ = [
+    "IndexReport",
+    "ProgressCallback",
+    "ProgressEvent",
+    "bootstrap",
+    "refresh_cron",
+    "refresh_one",
+]

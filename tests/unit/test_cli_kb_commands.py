@@ -4,7 +4,7 @@ import pytest
 from typer.testing import CliRunner
 
 from nz_workbench.cli import app
-from nz_workbench.kb.indexer import IndexReport
+from nz_workbench.kb.indexer import IndexReport, ProgressCallback
 
 
 @pytest.mark.unit
@@ -14,8 +14,15 @@ def test_kb_bootstrap_parses_databases_and_propagates_exit_code(
     runner = CliRunner()
     called: list[tuple[list[str], int | None]] = []
 
-    def fake_bootstrap(databases: list[str], top_n: int | None = None) -> IndexReport:
+    def fake_bootstrap(
+        databases: list[str],
+        top_n: int | None = None,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> IndexReport:
         called.append((databases, top_n))
+        if on_progress is not None:
+            on_progress({"stage": "total_update", "total": 1})
         return IndexReport(
             procedures_indexed=1,
             procedures_skipped=0,
@@ -31,7 +38,12 @@ def test_kb_bootstrap_parses_databases_and_propagates_exit_code(
     assert res.exit_code == 0
     assert called == [(["PROD_A", "PROD_B"], 1)]
 
-    def fake_bootstrap_err(databases: list[str], top_n: int | None = None) -> IndexReport:
+    def fake_bootstrap_err(
+        databases: list[str],
+        top_n: int | None = None,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> IndexReport:
         called.append((databases, top_n))
         return IndexReport(
             procedures_indexed=0,
@@ -58,10 +70,17 @@ def test_kb_refresh_validates_fqn(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
 
     monkeypatch.setattr("nz_workbench.cli.configure_logging_for_stdio", lambda: None)
-    monkeypatch.setattr(
-        "nz_workbench.cli.kb_indexer.refresh_one",
-        lambda db, schema, name: IndexReport(0, 1, 0, 0.0, []),
-    )
+
+    def _fake_refresh_one(
+        db: str,
+        schema: str,
+        name: str,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> IndexReport:
+        return IndexReport(0, 1, 0, 0.0, [])
+
+    monkeypatch.setattr("nz_workbench.cli.kb_indexer.refresh_one", _fake_refresh_one)
 
     ok = runner.invoke(app, ["kb-refresh", "PROD_X.DBO.SP1"])
     assert ok.exit_code == 0
@@ -74,9 +93,10 @@ def test_kb_refresh_validates_fqn(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_kb_refresh_cron_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr("nz_workbench.cli.configure_logging_for_stdio", lambda: None)
-    monkeypatch.setattr(
-        "nz_workbench.cli.kb_indexer.refresh_cron",
-        lambda: IndexReport(0, 0, 0, 0.0, ["err"]),
-    )
+
+    def _fake_refresh_cron(*, on_progress: ProgressCallback | None = None) -> IndexReport:
+        return IndexReport(0, 0, 0, 0.0, ["err"])
+
+    monkeypatch.setattr("nz_workbench.cli.kb_indexer.refresh_cron", _fake_refresh_cron)
     res = runner.invoke(app, ["kb-refresh-cron"])
     assert res.exit_code == 1
