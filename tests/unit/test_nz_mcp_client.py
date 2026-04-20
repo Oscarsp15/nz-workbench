@@ -38,7 +38,17 @@ def test_nz_mcp_client_initialize_and_call(monkeypatch: pytest.MonkeyPatch) -> N
         json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "nz-mcp"}}}),
         "not-json-noise",
         json.dumps({"jsonrpc": "2.0", "method": "notifications/logging", "params": {"msg": "x"}}),
-        json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"ok": True, "value": 1}}),
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "content": [{"type": "text", "text": "ok"}],
+                    "structuredContent": {"result": {"ok": True, "value": 1}},
+                    "isError": False,
+                },
+            }
+        ),
         json.dumps({"jsonrpc": "2.0", "id": 3, "result": {}}),
     ]
     fake = _FakeProc(stdin=io.StringIO(), stdout=io.StringIO("\n".join(out_lines) + "\n"))
@@ -130,7 +140,13 @@ def test_nz_mcp_client_start_raises_on_initialize_error(
 def test_nz_mcp_client_wraps_non_dict_results(monkeypatch: pytest.MonkeyPatch) -> None:
     out_lines = [
         json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),
-        json.dumps({"jsonrpc": "2.0", "id": 2, "result": None}),
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"content": [], "structuredContent": {}, "isError": False},
+            }
+        ),
         json.dumps({"jsonrpc": "2.0", "id": 3, "result": {}}),
     ]
     fake = _FakeProc(stdin=io.StringIO(), stdout=io.StringIO("\n".join(out_lines) + "\n"))
@@ -140,6 +156,116 @@ def test_nz_mcp_client_wraps_non_dict_results(monkeypatch: pytest.MonkeyPatch) -
     res = client.call("nz_list_procedures", {"database": "PROD_X"})
     assert res.ok is True
     assert res.result == {}
+
+
+@pytest.mark.unit
+def test_call_extracts_structured_content_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    out_lines = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "content": [{"type": "text", "text": "err"}],
+                    "structuredContent": {
+                        "error": {"code": "INVALID_INPUT", "context": {"detail": "schema required"}}
+                    },
+                    "isError": True,
+                },
+            }
+        ),
+        json.dumps({"jsonrpc": "2.0", "id": 3, "result": {}}),
+    ]
+    fake = _FakeProc(stdin=io.StringIO(), stdout=io.StringIO("\n".join(out_lines) + "\n"))
+    monkeypatch.setattr("subprocess.Popen", lambda *_a, **_k: fake)
+    client = NzMcpClient(bin_path="nz-mcp")
+    client.start()
+    res = client.call("nz_list_procedures", {"database": "PROD_X"})
+    assert res.ok is False
+    assert res.error_code == "INVALID_INPUT"
+    assert res.error_context == {"detail": "schema required"}
+
+
+@pytest.mark.unit
+def test_call_is_error_flag_without_structured_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    out_lines = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "content": [{"type": "text", "text": "no structured"}],
+                    "isError": True,
+                },
+            }
+        ),
+        json.dumps({"jsonrpc": "2.0", "id": 3, "result": {}}),
+    ]
+    fake = _FakeProc(stdin=io.StringIO(), stdout=io.StringIO("\n".join(out_lines) + "\n"))
+    monkeypatch.setattr("subprocess.Popen", lambda *_a, **_k: fake)
+    client = NzMcpClient(bin_path="nz-mcp")
+    client.start()
+    res = client.call("nz_list_procedures", {"database": "PROD_X"})
+    assert res.ok is False
+    assert res.error_code == "TOOL_ERROR"
+
+
+@pytest.mark.unit
+def test_call_fallback_parses_text_content_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    out_lines = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({"result": {"schemas": [{"name": "DBO"}]}}),
+                        }
+                    ],
+                    "isError": False,
+                },
+            }
+        ),
+        json.dumps({"jsonrpc": "2.0", "id": 3, "result": {}}),
+    ]
+    fake = _FakeProc(stdin=io.StringIO(), stdout=io.StringIO("\n".join(out_lines) + "\n"))
+    monkeypatch.setattr("subprocess.Popen", lambda *_a, **_k: fake)
+    client = NzMcpClient(bin_path="nz-mcp")
+    client.start()
+    res = client.call("nz_list_schemas", {"database": "PROD_X"})
+    assert res.ok is True
+    assert res.result == {"schemas": [{"name": "DBO"}]}
+
+
+@pytest.mark.unit
+def test_call_unknown_shape_returns_inner_as_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    out_lines = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "content": [],
+                    "structuredContent": {"hello": "world"},
+                    "isError": False,
+                },
+            }
+        ),
+        json.dumps({"jsonrpc": "2.0", "id": 3, "result": {}}),
+    ]
+    fake = _FakeProc(stdin=io.StringIO(), stdout=io.StringIO("\n".join(out_lines) + "\n"))
+    monkeypatch.setattr("subprocess.Popen", lambda *_a, **_k: fake)
+    client = NzMcpClient(bin_path="nz-mcp")
+    client.start()
+    res = client.call("nz_any", {})
+    assert res.ok is True
+    assert res.result == {"hello": "world"}
 
 
 @pytest.mark.unit
