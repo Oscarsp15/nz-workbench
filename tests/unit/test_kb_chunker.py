@@ -152,3 +152,35 @@ def test_property_does_not_drop_more_than_one_percent(body: str) -> None:
     loss = abs(len(body) - len(reconstructed)) / max(1, len(body))
     assert not math.isnan(loss)
     assert loss <= 0.01
+
+
+def test_chunk_enforces_max_tokens_on_monolithic_body() -> None:
+    """A body with no logical boundaries must still be split ≤ MAX_TOKENS.
+
+    Simulates a procedure with one gigantic statement and no semicolons at top
+    level — the shape that caused the BGE-M3 truncation warning in production.
+    """
+
+    original = chunker._count_tokens
+    chunker._count_tokens = _wc_tokens
+    try:
+        # 12000 whitespace-separated words, no semicolons, no BEGIN/END — the
+        # chunker's logical splitter has nothing to latch onto, so the ceiling
+        # is the only defense.
+        body = " ".join(f"w{i}" for i in range(12000))
+        chunks = chunker.chunk(body)
+
+        assert chunks, "chunker must emit at least one chunk"
+        for ch in chunks:
+            assert _wc_tokens(ch.text) <= chunker.MAX_TOKENS, (
+                f"chunk over MAX_TOKENS={chunker.MAX_TOKENS}: got {_wc_tokens(ch.text)}"
+            )
+    finally:
+        chunker._count_tokens = original
+
+
+def test_chunker_version_is_positive_int() -> None:
+    """Sanity: CHUNKER_VERSION exists and starts at ≥ 1 (0 = pre-versioning)."""
+
+    assert isinstance(chunker.CHUNKER_VERSION, int)
+    assert chunker.CHUNKER_VERSION >= 1

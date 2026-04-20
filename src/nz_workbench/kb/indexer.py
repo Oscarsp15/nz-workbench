@@ -13,7 +13,7 @@ import structlog
 
 from nz_workbench.config import load_config
 from nz_workbench.kb.chroma_store import ChromaStore
-from nz_workbench.kb.chunker import chunk
+from nz_workbench.kb.chunker import CHUNKER_VERSION, chunk
 from nz_workbench.kb.embedder import Embedder, make_embedder
 from nz_workbench.kb.metadata_store import MetadataStore, ProcedureKey, Reference
 from nz_workbench.nz_mcp_client import NzMcpClient, ToolResult
@@ -431,7 +431,12 @@ def _index_one(
 
     body_hash = _sha256(ddl)
     previous_hash = metadata.get_body_sha256(key)
-    if previous_hash is not None and previous_hash == body_hash:
+    previous_chunker = metadata.get_chunker_version(key)
+    if (
+        previous_hash is not None
+        and previous_hash == body_hash
+        and previous_chunker == CHUNKER_VERSION
+    ):
         return 0, 0, None
 
     # Remove prior chunks to avoid stale chunk IDs when chunk counts shrink.
@@ -475,7 +480,12 @@ def _index_one(
     if not references:
         references = _fallback_regex_references(ddl)
 
-    metadata.upsert_procedure(key, last_altered=proc.last_altered, body_sha256=body_hash)
+    metadata.upsert_procedure(
+        key,
+        last_altered=proc.last_altered,
+        body_sha256=body_hash,
+        chunker_version=CHUNKER_VERSION,
+    )
     metadata.upsert_references(key, references)
 
     return 1, len(chunks), None

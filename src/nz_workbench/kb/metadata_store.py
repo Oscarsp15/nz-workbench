@@ -52,7 +52,7 @@ class MetadataStore:
         return conn
 
     def ensure_schema(self) -> None:
-        """Create tables and indexes if not present."""
+        """Create tables and indexes if not present; apply lightweight migrations."""
 
         with self._connect() as conn:
             conn.executescript(
@@ -65,6 +65,7 @@ class MetadataStore:
                     last_altered   TEXT,
                     body_sha256    TEXT,
                     indexed_at     TEXT NOT NULL,
+                    chunker_version INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (database, schema, name, signature)
                 );
 
@@ -99,8 +100,22 @@ class MetadataStore:
                 );
                 """
             )
+            # Migration: older DBs (bootstrapped before chunker versioning) won't
+            # have chunker_version. Add it with default 0 so every existing row
+            # mismatches any positive CHUNKER_VERSION → forces a clean re-index.
+            cols = {row["name"] for row in conn.execute("PRAGMA table_info(procedure);").fetchall()}
+            if "chunker_version" not in cols:
+                conn.execute(
+                    "ALTER TABLE procedure ADD COLUMN chunker_version INTEGER NOT NULL DEFAULT 0;"
+                )
 
-    def upsert_procedure(self, key: ProcedureKey, last_altered: str, body_sha256: str) -> None:
+    def upsert_procedure(
+        self,
+        key: ProcedureKey,
+        last_altered: str,
+        body_sha256: str,
+        chunker_version: int = 0,
+    ) -> None:
         """Insert or replace a procedure row."""
 
         indexed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -109,13 +124,14 @@ class MetadataStore:
                 """
                 INSERT INTO procedure (
                     database, schema, name, signature,
-                    last_altered, body_sha256, indexed_at
+                    last_altered, body_sha256, indexed_at, chunker_version
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(database, schema, name, signature)
                 DO UPDATE SET last_altered=excluded.last_altered,
                               body_sha256=excluded.body_sha256,
-                              indexed_at=excluded.indexed_at;
+                              indexed_at=excluded.indexed_at,
+                              chunker_version=excluded.chunker_version;
                 """,
                 (
                     key.database,
@@ -125,6 +141,7 @@ class MetadataStore:
                     last_altered,
                     body_sha256,
                     indexed_at,
+                    chunker_version,
                 ),
             )
 
@@ -215,6 +232,21 @@ class MetadataStore:
                 (key.database, key.schema, key.name, key.signature),
             ).fetchone()
         return None if row is None else str(row["body_sha256"])
+
+    def get_chunker_version(self, key: ProcedureKey) -> int | None:
+        """Return the chunker version used to index this procedure, if present."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT chunker_version FROM procedure
+                WHERE database=? AND schema=? AND name=? AND signature=?;
+                """,
+                (key.database, key.schema, key.name, key.signature),
+            ).fetchone()
+        if row is None:
+            return None
+        return int(row["chunker_version"])
 
     def get_last_altered(self, key: ProcedureKey) -> str | None:
         """Return stored last_altered for a procedure, if present."""
