@@ -15,8 +15,8 @@ class Candidate:
     signature: str
     line_from: int
     line_to: int
-    confidence: float   # 0.0 – 1.0
-    matched_via: str    # "structural" | "semantic" | "hybrid"
+    confidence: float  # 0.0 - 1.0
+    matched_via: str  # "structural" | "semantic" | "hybrid"
 
 
 def find_candidates(*_args: object, **_kwargs: object) -> list[Candidate]:

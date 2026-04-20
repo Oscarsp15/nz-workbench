@@ -19,17 +19,17 @@ class RewriteRule:
     target_database: str
     target_schema: str
     target_object: str
-    reason: str   # human-readable why this rule applied
+    reason: str  # human-readable why this rule applied
 
 
 @dataclass(frozen=True, slots=True)
 class ManifestContext:
     """The parts of the REN manifest the rule engine needs to decide rewrites."""
 
-    prod_to_desa_prefix_map: dict[str, str]   # e.g. "PROD_MAESTROBI" -> "DESA_MAESTROBI"
-    tables_to_clone: frozenset[str]           # fully qualified names
+    prod_to_desa_prefix_map: dict[str, str]  # e.g. "PROD_MAESTROBI" -> "DESA_MAESTROBI"
+    tables_to_clone: frozenset[str]  # fully qualified names
     procedures_to_call_with_suffix: frozenset[str]
-    suffix: str                                # "_35145"
+    suffix: str  # "_35145"
 
 
 def rewrite_reference(
@@ -47,4 +47,4 @@ def rewrite_reference(
     raise NotImplementedError
 
 
-__all__ = ["RefKind", "RewriteRule", "ManifestContext", "rewrite_reference"]
+__all__ = ["ManifestContext", "RefKind", "RewriteRule", "rewrite_reference"]

@@ -20,9 +20,11 @@ _FORBIDDEN_PATTERNS: Final[tuple[str, ...]] = ("TODO: remove before merge",)
 
 
 def _staged_files() -> list[Path]:
-    result = subprocess.run(  # noqa: S603
+    result = subprocess.run(
         ["git", "ls-files"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     return [Path(p) for p in result.stdout.splitlines() if p.strip()]
 

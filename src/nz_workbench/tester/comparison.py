@@ -11,7 +11,7 @@ class DimensionDiff:
     """Aggregated diff along one dimension (e.g. CANAL)."""
 
     dimension: str
-    rows: list[tuple[str, int, int]]   # (value, prod_count, desa_count)
+    rows: list[tuple[str, int, int]]  # (value, prod_count, desa_count)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,4 +39,4 @@ def run_comparison(ren_folder: Path) -> ComparisonResult:
     raise NotImplementedError
 
 
-__all__ = ["DimensionDiff", "ComparisonResult", "run_comparison"]
+__all__ = ["ComparisonResult", "DimensionDiff", "run_comparison"]

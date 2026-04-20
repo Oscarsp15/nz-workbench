@@ -46,4 +46,4 @@ def decide(
     raise NotImplementedError
 
 
-__all__ = ["Action", "CatalogEntry", "AppliedAction", "load_catalog", "decide"]
+__all__ = ["Action", "AppliedAction", "CatalogEntry", "decide", "load_catalog"]
