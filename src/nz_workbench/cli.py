@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
 
 from nz_workbench import __version__
@@ -32,6 +44,56 @@ _ARG_REN_FOLDER_APPROVED = typer.Argument(..., help="Path to ren/REN_<N>/ after 
 def _parse_csv(value: str) -> list[str]:
     items = [x.strip() for x in value.split(",")]
     return [x for x in items if x]
+
+
+@contextmanager
+def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:
+    """Render a Rich progress bar on stderr and yield a callback that drives it.
+
+    Raises the root-logger level to WARNING while active so INFO events from
+    the indexer don't shred the bar. The bar is transient and clears on exit
+    so the final report table prints cleanly.
+    """
+
+    root_logger = logging.getLogger()
+    previous_level = root_logger.level
+    root_logger.setLevel(logging.WARNING)
+
+    console = Console(stderr=True)
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("ETA"),
+        TimeRemainingColumn(),
+        console=console,
+        transient=True,
+        refresh_per_second=4,
+    )
+
+    try:
+        progress.start()
+        task_id = progress.add_task("Discovering procedures...", total=None)
+
+        def _on_progress(event: kb_indexer.ProgressEvent) -> None:
+            stage = event.get("stage")
+            if stage == "total_update":
+                total = event.get("total")
+                if isinstance(total, int):
+                    progress.update(task_id, total=total)
+            elif stage == "proc_start":
+                desc = f"{event['database']}.{event['schema']}.{event['name']}"
+                progress.update(task_id, description=desc)
+            elif stage == "proc_done":
+                progress.update(task_id, advance=1)
+
+        yield _on_progress
+    finally:
+        progress.stop()
+        root_logger.setLevel(previous_level)
 
 
 def _print_index_report(title: str, report: kb_indexer.IndexReport) -> None:
@@ -84,7 +146,8 @@ def kb_bootstrap_cmd(
     if not dbs:
         raise typer.BadParameter("at least one database is required")
 
-    report = kb_indexer.bootstrap(dbs, top_n=top_n)
+    with _progress_context() as on_progress:
+        report = kb_indexer.bootstrap(dbs, top_n=top_n, on_progress=on_progress)
     _print_index_report("KB bootstrap", report)
     raise typer.Exit(code=1 if report.errors else 0)
 
@@ -101,7 +164,8 @@ def kb_refresh_cmd(
     if len(parts) != fqn_parts:
         raise typer.BadParameter("expected DB.SCHEMA.NAME")
     db, schema, name = parts
-    report = kb_indexer.refresh_one(db, schema, name)
+    with _progress_context() as on_progress:
+        report = kb_indexer.refresh_one(db, schema, name, on_progress=on_progress)
     _print_index_report("KB refresh", report)
     raise typer.Exit(code=1 if report.errors else 0)
 
@@ -111,7 +175,8 @@ def kb_refresh_cron_cmd() -> None:
     """Scan _V_PROCEDURE.LASTALTERTIME and re-index changed procedures (opt-in cron)."""
 
     configure_logging_for_stdio()
-    report = kb_indexer.refresh_cron()
+    with _progress_context() as on_progress:
+        report = kb_indexer.refresh_cron(on_progress=on_progress)
     _print_index_report("KB refresh-cron", report)
     raise typer.Exit(code=1 if report.errors else 0)
 

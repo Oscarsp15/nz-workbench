@@ -11,6 +11,8 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) y el p
 - EN: initial project bootstrap — `AGENTS.md`, architecture docs, standards, REN templates, code skeleton, CI scripts.
 - ES: knowledge base sprint 1 — chunker NZPLSQL, embedder BGE-M3 lazy, Chroma store, SQLite metadata store, indexer y wiring de CLI (`kb-bootstrap`, `kb-refresh`, `kb-refresh-cron`).
 - EN: knowledge base sprint 1 — NZPLSQL chunker, lazy BGE-M3 embedder, Chroma store, SQLite metadata store, indexer and CLI wiring (`kb-bootstrap`, `kb-refresh`, `kb-refresh-cron`).
+- ES: barra de progreso Rich en `kb-bootstrap` / `kb-refresh` / `kb-refresh-cron` con descripción por procedimiento, contador M/N, tiempo transcurrido y ETA; durante la barra el logging INFO se silencia para no romper el render. El indexer expone un callback `on_progress` agnóstico de UI (`ProgressCallback`/`ProgressEvent`).
+- EN: Rich progress bar on `kb-bootstrap` / `kb-refresh` / `kb-refresh-cron` showing per-procedure description, M/N counter, elapsed time, and ETA; INFO logs are silenced while the bar is active to keep the render clean. The indexer exposes a UI-agnostic `on_progress` callback (`ProgressCallback`/`ProgressEvent`).
 
 ### Fixed
 - ES: `NzMcpClient.call()` ahora desenvuelve el envelope MCP de `tools/call` (lee `structuredContent.result`) y mapea errores estructurados; incluye fallback a JSON en bloques `content`.
