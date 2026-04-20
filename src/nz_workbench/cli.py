@@ -89,7 +89,11 @@ def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:
                 desc = f"{event['database']}.{event['schema']}.{event['name']}"
                 progress.update(task_id, description=desc)
             elif stage == "proc_done":
-                progress.update(task_id, advance=1)
+                # Advance by work_units (bytes when nz-mcp reports size_bytes,
+                # else 1) so a big SP moves the bar proportional to its effort.
+                # This keeps the ETA stable across wildly varying proc sizes.
+                units = event.get("work_units", 1)
+                progress.update(task_id, advance=int(units) if isinstance(units, int) else 1)
 
         yield _on_progress
     finally:

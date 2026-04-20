@@ -250,7 +250,8 @@ def test_bootstrap_emits_progress_events(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert "proc_done" in stages
 
     total_updates = [e for e in events if e["stage"] == "total_update"]
-    assert total_updates[-1]["total"] == 1
+    # Fake client returns size_bytes=10 → total is 10 bytes of work, not 1 proc.
+    assert total_updates[-1]["total"] == 10
 
     starts = [e for e in events if e["stage"] == "proc_start"]
     assert starts == [{"stage": "proc_start", "database": "PROD_X", "schema": "DBO", "name": "SP1"}]
@@ -265,6 +266,7 @@ def test_bootstrap_emits_progress_events(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert done["skipped"] is False
     assert done["error"] is None
     assert done["chunks"] == 1
+    assert done["work_units"] == 10
 
     # Second run: last_altered skip path still emits proc_start + proc_done(skipped).
     events.clear()
@@ -275,6 +277,7 @@ def test_bootstrap_emits_progress_events(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert dones2[0]["skipped"] is True
     assert dones2[0]["indexed"] is False
     assert dones2[0]["chunks"] == 0
+    assert dones2[0]["work_units"] == 10
 
 
 @pytest.mark.unit
@@ -335,6 +338,64 @@ def test_refresh_one_indexes_and_then_skips_by_body_hash(
     last_event = events[-1]
     assert last_event["skipped"] is True
     assert last_event["indexed"] is not True
+
+
+@pytest.mark.unit
+def test_bootstrap_invalidates_skip_when_chunker_version_drifts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Bootstrap must NOT rely on last_altered alone when chunker_version drifted.
+
+    Before the fix, a stale ``chunker_version`` was ignored by bootstrap's
+    early-skip (``last_altered`` match was enough). Users whose SPs weren't
+    altered in Netezza never got their local index refreshed after a chunker
+    bump — defeating the auto-migration.
+    """
+
+    fake_meta = _FakeMetadataStore(tmp_path / "metadata.sqlite")
+    fake_client = _FakeNzMcpClient(bin_path="nz-mcp")
+
+    def _meta_factory(_p: Path) -> _FakeMetadataStore:
+        return fake_meta
+
+    def _chroma_factory(root: Path) -> _FakeChromaStore:
+        return _FakeChromaStore(root)
+
+    def _client_factory(*, bin_path: str) -> _FakeNzMcpClient:
+        assert bin_path
+        return fake_client
+
+    monkeypatch.setattr(
+        indexer,
+        "load_config",
+        lambda: _Cfg(state_dir=tmp_path, nz_mcp_bin="nz-mcp", embedder_model="BAAI/bge-m3"),
+    )
+    monkeypatch.setattr(indexer, "MetadataStore", _meta_factory)
+    monkeypatch.setattr(indexer, "ChromaStore", _chroma_factory)
+    monkeypatch.setattr(indexer, "NzMcpClient", _client_factory)
+    monkeypatch.setattr(indexer, "make_embedder", lambda _name: _FakeEmbedder())
+    monkeypatch.setattr(
+        indexer,
+        "chunk",
+        lambda _ddl: [
+            type("C", (), {"text": "x", "line_from": 1, "line_to": 1, "section_hint": "body"})()
+        ],
+    )
+
+    # First bootstrap at the current chunker version indexes normally.
+    r1 = indexer.bootstrap(["PROD_X"])
+    assert r1.procedures_indexed == 1
+    assert fake_client.get_ddl_calls == 1
+
+    # Simulate a legacy index (chunker v0) while last_altered still matches PROD.
+    key = ProcedureKey(database="PROD_X", schema="DBO", name="SP1", signature="()")
+    fake_meta.chunker_ver[(key.database, key.schema, key.name, key.signature)] = 0
+
+    # Second bootstrap: last_altered matches but chunker_version differs → re-index.
+    r2 = indexer.bootstrap(["PROD_X"])
+    assert r2.procedures_indexed == 1, "chunker_version drift must invalidate bootstrap skip"
+    assert r2.procedures_skipped == 0
+    assert fake_client.get_ddl_calls == 2
 
 
 @pytest.mark.unit
