@@ -23,6 +23,26 @@ def test_kb_bootstrap_parses_databases_and_propagates_exit_code(
         called.append((databases, top_n))
         if on_progress is not None:
             on_progress({"stage": "total_update", "total": 1})
+            on_progress(
+                {
+                    "stage": "proc_start",
+                    "database": "PROD_A",
+                    "schema": "DBO",
+                    "name": "SP1",
+                }
+            )
+            on_progress(
+                {
+                    "stage": "proc_done",
+                    "database": "PROD_A",
+                    "schema": "DBO",
+                    "name": "SP1",
+                    "chunks": 2,
+                    "indexed": True,
+                    "skipped": False,
+                    "error": None,
+                }
+            )
         return IndexReport(
             procedures_indexed=1,
             procedures_skipped=0,

@@ -264,3 +264,114 @@ def test_bootstrap_emits_progress_events(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert dones2[0]["skipped"] is True
     assert dones2[0]["indexed"] is False
     assert dones2[0]["chunks"] == 0
+
+
+@pytest.mark.unit
+def test_refresh_one_indexes_and_then_skips_by_body_hash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_meta = _FakeMetadataStore(tmp_path / "metadata.sqlite")
+    fake_client = _FakeNzMcpClient(bin_path="nz-mcp")
+
+    def _meta_factory(_p: Path) -> _FakeMetadataStore:
+        return fake_meta
+
+    def _chroma_factory(root: Path) -> _FakeChromaStore:
+        return _FakeChromaStore(root)
+
+    def _client_factory(*, bin_path: str) -> _FakeNzMcpClient:
+        assert bin_path
+        return fake_client
+
+    monkeypatch.setattr(
+        indexer,
+        "load_config",
+        lambda: _Cfg(state_dir=tmp_path, nz_mcp_bin="nz-mcp", embedder_model="BAAI/bge-m3"),
+    )
+    monkeypatch.setattr(indexer, "MetadataStore", _meta_factory)
+    monkeypatch.setattr(indexer, "ChromaStore", _chroma_factory)
+    monkeypatch.setattr(indexer, "NzMcpClient", _client_factory)
+    monkeypatch.setattr(indexer, "make_embedder", lambda _name: _FakeEmbedder())
+    monkeypatch.setattr(
+        indexer,
+        "chunk",
+        lambda _ddl: [
+            type("C", (), {"text": "x", "line_from": 1, "line_to": 1, "section_hint": "body"})()
+        ],
+    )
+
+    events: list[dict[str, Any]] = []
+    r1 = indexer.refresh_one("PROD_X", "DBO", "SP1", on_progress=events.append)
+
+    assert r1.procedures_indexed == 1
+    assert r1.procedures_skipped == 0
+    assert r1.chunks_written == 1
+    assert r1.errors == []
+
+    stages = [e["stage"] for e in events]
+    assert stages == ["total_update", "proc_start", "proc_done"]
+    assert events[0] == {"stage": "total_update", "total": 1}
+    assert events[-1]["indexed"] is True
+    assert events[-1]["skipped"] is False
+    assert events[-1]["error"] is None
+
+    # Same body hash on second run → indexed=0, skipped=1.
+    events.clear()
+    r2 = indexer.refresh_one("PROD_X", "DBO", "SP1", on_progress=events.append)
+    assert r2.procedures_indexed == 0
+    assert r2.procedures_skipped == 1
+    assert r2.errors == []
+    assert events[-1]["skipped"] is True
+    assert events[-1]["indexed"] is False
+
+
+@pytest.mark.unit
+def test_refresh_one_surfaces_ddl_fetch_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_meta = _FakeMetadataStore(tmp_path / "metadata.sqlite")
+
+    class _FailingClient(_FakeNzMcpClient):
+        def call(self, tool: str, arguments: dict[str, Any]) -> ToolResult:
+            if tool == "nz_get_procedure_ddl":
+                return ToolResult(
+                    ok=False,
+                    result=None,
+                    error_code="NOT_FOUND",
+                    error_context={"procedure": arguments.get("procedure")},
+                )
+            return super().call(tool, arguments)
+
+    fake_client = _FailingClient(bin_path="nz-mcp")
+
+    def _meta_factory(_p: Path) -> _FakeMetadataStore:
+        return fake_meta
+
+    def _chroma_factory(root: Path) -> _FakeChromaStore:
+        return _FakeChromaStore(root)
+
+    def _client_factory(*, bin_path: str) -> _FailingClient:
+        assert bin_path
+        return fake_client
+
+    monkeypatch.setattr(
+        indexer,
+        "load_config",
+        lambda: _Cfg(state_dir=tmp_path, nz_mcp_bin="nz-mcp", embedder_model="BAAI/bge-m3"),
+    )
+    monkeypatch.setattr(indexer, "MetadataStore", _meta_factory)
+    monkeypatch.setattr(indexer, "ChromaStore", _chroma_factory)
+    monkeypatch.setattr(indexer, "NzMcpClient", _client_factory)
+    monkeypatch.setattr(indexer, "make_embedder", lambda _name: _FakeEmbedder())
+
+    events: list[dict[str, Any]] = []
+    r = indexer.refresh_one("PROD_X", "DBO", "MISSING_SP", on_progress=events.append)
+
+    assert r.procedures_indexed == 0
+    assert r.procedures_skipped == 0
+    assert r.errors and "MISSING_SP" in r.errors[0]
+
+    done = [e for e in events if e["stage"] == "proc_done"][-1]
+    assert done["error"] is not None
+    assert done["indexed"] is False
+    assert done["skipped"] is False
