@@ -19,6 +19,10 @@ _ENV_BATCH: Final[str] = "NZ_WORKBENCH_EMBED_BATCH"
 _ENV_DEVICE: Final[str] = "NZ_WORKBENCH_EMBED_DEVICE"  # "cpu" | "cuda" | "" (auto-detect, default)
 _EXPECTED_DIM: Final[int] = 1024
 
+# VRAM thresholds for batch size selection (in GB)
+_VRAM_HIGH: Final[int] = 8    # 8GB+ VRAM: batch_size=32
+_VRAM_MEDIUM: Final[int] = 6  # 6GB+ VRAM: batch_size=16
+
 _TORCH: Any | None = None
 _imported_torch: Any
 try:
@@ -66,9 +70,9 @@ def _default_batch_size() -> int:
         vram_bytes = _TORCH.cuda.get_device_properties(0).total_memory
         vram_gb = vram_bytes / (1024 ** 3)
 
-        if vram_gb >= 8:
+        if vram_gb >= _VRAM_HIGH:
             return 32
-        elif vram_gb >= 6:
+        elif vram_gb >= _VRAM_MEDIUM:
             return 16
         else:  # 4GB or less (e.g., GTX 1650 Ti)
             return 8
