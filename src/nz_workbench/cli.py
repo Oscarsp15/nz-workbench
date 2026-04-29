@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -57,8 +58,18 @@ def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:
 
     root_logger = logging.getLogger()
     previous_level = root_logger.level
-    root_logger.setLevel(logging.WARNING)
+    # Raise the root level to CRITICAL so that errors and warnings from any
+    # library (including transformers' "Token indices sequence length…" warning)
+    # are suppressed while the Rich bar is active.  The bar is redrawn on every
+    # character written to stderr, so a single stray line breaks the layout and
+    # causes Rich to start a new bar below the existing one.
+    root_logger.setLevel(logging.CRITICAL)
     set_suppress_info_events(True)
+
+    # Also control the HuggingFace transformers logging via its env-var so the
+    # warning is suppressed even before the root logger intercepts it.
+    _prev_tv = os.environ.get("TRANSFORMERS_VERBOSITY")
+    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
     console = Console(stderr=True)
     progress = Progress(
@@ -100,6 +111,11 @@ def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:
         progress.stop()
         set_suppress_info_events(False)
         root_logger.setLevel(previous_level)
+        # Restore TRANSFORMERS_VERBOSITY to whatever it was before.
+        if _prev_tv is None:
+            os.environ.pop("TRANSFORMERS_VERBOSITY", None)
+        else:
+            os.environ["TRANSFORMERS_VERBOSITY"] = _prev_tv
 
 
 def _print_index_report(title: str, report: kb_indexer.IndexReport) -> None:

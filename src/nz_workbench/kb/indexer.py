@@ -589,16 +589,21 @@ def bootstrap(  # noqa: PLR0912, PLR0915
                                 if item_name == p.name:
                                     last_alt = str(item.get("last_altered") or "")
                                     ddl_str = str(item.get("ddl") or "")
+                                    size_raw = item.get("size_bytes") or item.get("size")
+                                    new_size = (
+                                        int(size_raw) if isinstance(size_raw, int) else p.size_bytes
+                                    )
+
                                     if ddl_str:
                                         batch_ddls[item_name] = ddl_str
-                                    if last_alt:
+                                    if last_alt or new_size != p.size_bytes:
                                         updated_p = _ProcInfo(
                                             database=p.database,
                                             schema=p.schema,
                                             name=p.name,
                                             signature=p.signature,
-                                            last_altered=last_alt,
-                                            size_bytes=p.size_bytes,
+                                            last_altered=last_alt or p.last_altered,
+                                            size_bytes=new_size,
                                         )
                                     break
                             updated_procs.append(updated_p)
