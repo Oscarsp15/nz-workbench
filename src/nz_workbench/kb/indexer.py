@@ -140,13 +140,20 @@ def _parse_proc_list(database: str, schema: str, raw: list[dict[str, Any]]) -> l
     return procs
 
 
-def _fetch_all_procedures_ddl(client: NzMcpClient, database: str, schema: str) -> dict[str, Any] | None:
+def _fetch_all_procedures_ddl(
+    client: NzMcpClient, database: str, schema: str
+) -> dict[str, Any] | None:
     """Intenta batch; retorna None si la tool no existe."""
     res = client.call(_TOOL_GET_ALL_DDL, {"database": database, "schema": schema})
     if res.error_code in ("TOOL_NOT_FOUND", "UNKNOWN_TOOL"):
         return None
     if not res.ok:
-        _log.warning("kb_bootstrap_batch_ddl_failed", database=database, schema=schema, error=res.error_code)
+        _log.warning(
+            "kb_bootstrap_batch_ddl_failed",
+            database=database,
+            schema=schema,
+            error=res.error_code,
+        )
         return None
     return res.result
 
@@ -498,7 +505,7 @@ def _index_one(
     return 1, len(chunks), None
 
 
-def bootstrap(
+def bootstrap(  # noqa: PLR0912, PLR0915
     databases: list[str],
     top_n: int | None = None,
     *,

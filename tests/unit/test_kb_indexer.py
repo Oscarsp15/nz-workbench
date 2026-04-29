@@ -94,7 +94,7 @@ class _FakeNzMcpClient:
     def stop(self) -> None:
         return
 
-    def call(self, tool: str, arguments: dict[str, Any]) -> ToolResult:
+    def call(self, tool: str, arguments: dict[str, Any]) -> ToolResult:  # noqa: PLR0911
         if tool == "nz_list_schemas":
             return ToolResult(
                 ok=True,
@@ -573,7 +573,9 @@ def test_bootstrap_uses_batch_ddl(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
 
 
 @pytest.mark.unit
-def test_bootstrap_fallback_to_individual_ddl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_bootstrap_fallback_to_individual_ddl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     fake_meta = _FakeMetadataStore(tmp_path / "metadata.sqlite")
     fake_client = _FakeNzMcpClient(bin_path="nz-mcp")
 
