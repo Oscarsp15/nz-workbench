@@ -433,6 +433,7 @@ def _index_one(
     )
 
     if ddl is None:
+        t_ddl_start = time.perf_counter()
         ddl_res = _call_with_fallbacks(
             client,
             _TOOL_GET_DDL,
@@ -444,6 +445,7 @@ def _index_one(
             ],
         )
         ddl = _extract_text(ddl_res, keys=("ddl", "body", "source"))
+        t_ddl_ms = (time.perf_counter() - t_ddl_start) * 1000
         if ddl is None:
             detail = f"{proc.database}.{proc.schema}.{proc.name}"
             return (
@@ -451,6 +453,8 @@ def _index_one(
                 0,
                 f"failed to fetch DDL for {detail}: {ddl_res.error_code}",
             )
+    else:
+        t_ddl_ms = 0.0
 
     body_hash = _sha256(ddl)
     previous_hash = metadata.get_body_sha256(key)
@@ -465,8 +469,28 @@ def _index_one(
     # Remove prior chunks to avoid stale chunk IDs when chunk counts shrink.
     chroma.delete_by_procedure(proc.database, proc.schema, proc.name)
 
+    ddl_lines = ddl.count("\n") + 1
+    ddl_chars = len(ddl)
+
+    t_chunk_start = time.perf_counter()
     chunks = chunk(ddl)
+    t_chunk_ms = (time.perf_counter() - t_chunk_start) * 1000
+
+    t_embed_start = time.perf_counter()
     vectors = embedder.embed([c.text for c in chunks])
+    t_embed_ms = (time.perf_counter() - t_embed_start) * 1000
+
+    _log.debug(
+        "kb_index_timing",
+        procedure=proc.name,
+        lines=ddl_lines,
+        chars=ddl_chars,
+        chunks=len(chunks),
+        ddl_ms=round(t_ddl_ms),
+        chunk_ms=round(t_chunk_ms),
+        embed_ms=round(t_embed_ms),
+    )
+
     ids = [
         f"{proc.database}.{proc.schema}.{proc.name}:{proc.signature}:{idx}"
         for idx in range(len(chunks))

@@ -16,8 +16,12 @@ import structlog
 _log = structlog.get_logger(__name__)
 
 _ENV_BATCH: Final[str] = "NZ_WORKBENCH_EMBED_BATCH"
-_ENV_DEVICE: Final[str] = "NZ_WORKBENCH_EMBED_DEVICE"  # "cpu" (default) | "cuda"
+_ENV_DEVICE: Final[str] = "NZ_WORKBENCH_EMBED_DEVICE"  # "cpu" | "cuda" | "" (auto-detect, default)
 _EXPECTED_DIM: Final[int] = 1024
+
+# VRAM thresholds for batch size selection (in GB)
+_VRAM_HIGH: Final[int] = 8  # 8GB+ VRAM: batch_size=32
+_VRAM_MEDIUM: Final[int] = 6  # 6GB+ VRAM: batch_size=16
 
 _TORCH: Any | None = None
 _imported_torch: Any
@@ -46,26 +50,61 @@ class Embedder(Protocol):
         ...
 
 
-def _batch_size() -> int:
-    raw = os.environ.get(_ENV_BATCH, "32")
+def _default_batch_size() -> int:
+    """Choose batch size based on available GPU memory.
+
+    BGE-M3 with large batches can exceed VRAM, causing severe slowdown due to
+    memory swapping. Empirically tested optimal values:
+    - 4GB VRAM (GTX 1650 Ti): batch_size=8 is 12x faster than 32
+    - 6GB+ VRAM: batch_size=16 works well
+    - 8GB+ VRAM: batch_size=32 is optimal
+    """
+    if _TORCH is None:
+        return 8  # CPU: smaller batches reduce memory pressure
+
+    if not _TORCH.cuda.is_available():
+        return 8
+
     try:
-        value = int(raw)
-    except ValueError:
-        return 32
-    return max(1, min(value, 512))
+        # Get total VRAM in GB
+        vram_bytes = _TORCH.cuda.get_device_properties(0).total_memory
+        vram_gb = vram_bytes / (1024**3)
+
+        if vram_gb >= _VRAM_HIGH:
+            return 32
+        elif vram_gb >= _VRAM_MEDIUM:
+            return 16
+        else:  # 4GB or less (e.g., GTX 1650 Ti)
+            return 8
+    except Exception:
+        return 8  # Safe default
+
+
+def _batch_size() -> int:
+    raw = os.environ.get(_ENV_BATCH, "")
+    if raw.strip():
+        try:
+            value = int(raw)
+            return max(1, min(value, 512))
+        except ValueError:
+            pass
+    return _default_batch_size()
 
 
 def _resolve_device() -> str:
-    requested = os.environ.get(_ENV_DEVICE, "cpu").strip().lower()
-    if requested not in {"cpu", "cuda"}:
-        requested = "cpu"
+    # Auto-detect CUDA if available, unless explicitly set to "cpu"
+    requested = os.environ.get(_ENV_DEVICE, "").strip().lower()
 
-    if requested == "cuda":
-        if _TORCH is None:
-            return "cpu"
-        return "cuda" if bool(_TORCH.cuda.is_available()) else "cpu"
+    if requested == "cpu":
+        return "cpu"
 
-    return "cpu"
+    if requested not in {"", "cuda", "auto"}:
+        requested = ""
+
+    # Default: use CUDA if available
+    if _TORCH is None:
+        return "cpu"
+    return "cuda" if bool(_TORCH.cuda.is_available()) else "cpu"
 
 
 @dataclass(slots=True)
