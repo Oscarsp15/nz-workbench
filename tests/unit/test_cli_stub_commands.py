@@ -42,8 +42,20 @@ def test_stub_commands_exit_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
 
 @pytest.mark.unit
-def test_serve_command_is_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_serve_command_runs_mcp_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that serve command calls run_stdio_server."""
     runner = CliRunner()
     monkeypatch.setattr("nz_workbench.cli.configure_logging_for_stdio", lambda: None)
+
+    # Mock the MCP server runner to avoid actual stdio operations
+    server_called = False
+
+    def mock_run_stdio_server() -> None:
+        nonlocal server_called
+        server_called = True
+
+    monkeypatch.setattr("nz_workbench.cli.run_stdio_server", mock_run_stdio_server)
+
     res = runner.invoke(app, ["serve"])
-    assert res.exit_code != 0
+    assert res.exit_code == 0
+    assert server_called

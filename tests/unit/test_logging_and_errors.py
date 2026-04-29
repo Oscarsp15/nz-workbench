@@ -55,6 +55,6 @@ def test_errors_render_codes() -> None:
 
 
 @pytest.mark.unit
-def test_mcp_server_is_stub_but_configures_logging() -> None:
-    with pytest.raises(NotImplementedError):
-        run_stdio_server()
+def test_mcp_server_run_stdio_server_is_importable() -> None:
+    """Verify run_stdio_server can be imported (actual server test is in CLI tests)."""
+    assert callable(run_stdio_server)

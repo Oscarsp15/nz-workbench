@@ -22,7 +22,7 @@ class _FakeEmbedder:
     def embed(
         self,
         texts: list[str],
-        on_batch_progress: object = None,  # noqa: ARG002
+        on_batch_progress: object = None,
     ) -> list[list[float]]:
         return [[0.0, 0.0, 0.0] for _ in texts]
 
