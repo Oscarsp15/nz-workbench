@@ -336,8 +336,7 @@ def kb_bootstrap_cmd(
         _print_index_report("KB bootstrap", report)
         raise typer.Exit(code=1 if report.errors else 0)
     except KeyboardInterrupt:
-        console = Console(stderr=True)
-        console.print("\n[yellow]Cancelled.[/yellow] Progress saved up to last completed SP.")
+        typer.secho("\nCancelled. Progress saved up to last completed SP.", fg="yellow", err=True)
         raise typer.Exit(code=130) from None
 
 
@@ -358,8 +357,7 @@ def kb_refresh_cmd(
         _print_index_report("KB refresh", report)
         raise typer.Exit(code=1 if report.errors else 0)
     except KeyboardInterrupt:
-        console = Console(stderr=True)
-        console.print("\n[yellow]Cancelled.[/yellow]")
+        typer.secho("\nCancelled.", fg="yellow", err=True)
         raise typer.Exit(code=130) from None
 
 
@@ -373,8 +371,7 @@ def kb_refresh_cron_cmd() -> None:
         _print_index_report("KB refresh-cron", report)
         raise typer.Exit(code=1 if report.errors else 0)
     except KeyboardInterrupt:
-        console = Console(stderr=True)
-        console.print("\n[yellow]Cancelled.[/yellow] Progress saved up to last completed SP.")
+        typer.secho("\nCancelled. Progress saved up to last completed SP.", fg="yellow", err=True)
         raise typer.Exit(code=130) from None
 
 
