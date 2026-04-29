@@ -42,6 +42,9 @@ Shapes (``stage`` is always present):
      "chunks": int, "indexed": bool, "skipped": bool, "error": str | None,
      "work_units": int}``. ``work_units`` is the size that should advance the
   bar for this procedure.
+- ``{"stage": "phase", "phase": str, "detail": str | None}`` — sub-phase within
+  a procedure: "chunking", "embedding". ``detail`` may contain extra info like
+  batch progress.
 """
 
 
@@ -282,6 +285,7 @@ def _index_procedures(
             embedder=embedder,
             proc=proc,
             ddl=proc_ddl,
+            on_progress=on_progress,
         )
         if err is not None:
             errors.append(err)
@@ -424,6 +428,7 @@ def _index_one(
     embedder: Embedder,
     proc: _ProcInfo,
     ddl: str | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> tuple[int, int, str | None]:
     key = ProcedureKey(
         database=proc.database,
@@ -472,9 +477,21 @@ def _index_one(
     ddl_lines = ddl.count("\n") + 1
     ddl_chars = len(ddl)
 
+    if on_progress is not None:
+        on_progress({"stage": "phase", "phase": "chunking", "detail": None})
+
     t_chunk_start = time.perf_counter()
     chunks = chunk(ddl)
     t_chunk_ms = (time.perf_counter() - t_chunk_start) * 1000
+
+    if on_progress is not None:
+        on_progress(
+            {
+                "stage": "phase",
+                "phase": "embedding",
+                "detail": f"{len(chunks)} chunks",
+            }
+        )
 
     t_embed_start = time.perf_counter()
     vectors = embedder.embed([c.text for c in chunks])
@@ -694,6 +711,7 @@ def refresh_one(
             metadata=metadata,
             embedder=embedder,
             proc=proc_info,
+            on_progress=on_progress,
         )
         if err is not None:
             errors.append(err)

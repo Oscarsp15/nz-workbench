@@ -350,8 +350,13 @@ def test_refresh_one_indexes_and_then_skips_by_body_hash(
     assert r1.errors == []
 
     stages = [e["stage"] for e in events]
-    assert stages == ["total_update", "proc_start", "proc_done"]
+    # Now includes phase events for chunking and embedding
+    assert stages == ["total_update", "proc_start", "phase", "phase", "proc_done"]
     assert events[0] == {"stage": "total_update", "total": 1}
+    # Verify phase events
+    assert events[2] == {"stage": "phase", "phase": "chunking", "detail": None}
+    assert events[3]["stage"] == "phase"
+    assert events[3]["phase"] == "embedding"
     assert events[-1]["indexed"] is True
     assert events[-1]["skipped"] is False
     assert events[-1]["error"] is None

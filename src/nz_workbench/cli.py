@@ -23,6 +23,7 @@ from rich.table import Table
 
 from nz_workbench import __version__
 from nz_workbench.kb import indexer as kb_indexer
+from nz_workbench.kb.embedder import get_hardware_info
 from nz_workbench.logging_config import configure_logging_for_stdio, set_suppress_info_events
 from nz_workbench.mcp_server import run_stdio_server
 
@@ -45,6 +46,18 @@ _ARG_REN_FOLDER_APPROVED = typer.Argument(..., help="Path to ren/REN_<N>/ after 
 def _parse_csv(value: str) -> list[str]:
     items = [x.strip() for x in value.split(",")]
     return [x for x in items if x]
+
+
+def _print_hardware_info(console: Console) -> None:
+    """Print hardware configuration before starting the progress bar."""
+    hw = get_hardware_info()
+    if hw.device == "cuda" and hw.gpu_name:
+        vram_str = f", {hw.vram_gb}GB" if hw.vram_gb else ""
+        device_info = f"[green]CUDA[/green] ({hw.gpu_name}{vram_str})"
+    else:
+        device_info = "[yellow]CPU[/yellow]"
+    console.print(f"Device: {device_info} │ Batch: {hw.batch_size}")
+    console.print("─" * 50)
 
 
 @contextmanager
@@ -72,6 +85,10 @@ def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:
     os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
     console = Console(stderr=True)
+
+    # Show hardware info before starting progress
+    _print_hardware_info(console)
+
     progress = Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -86,6 +103,9 @@ def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:
         refresh_per_second=4,
     )
 
+    # Track current phase for display
+    current_phase: list[str] = [""]
+
     try:
         progress.start()
         task_id = progress.add_task("Discovering procedures...", total=None)
@@ -97,8 +117,20 @@ def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:
                 if isinstance(total, int):
                     progress.update(task_id, total=total)
             elif stage == "proc_start":
-                desc = f"{event['database']}.{event['schema']}.{event['name']}"
-                progress.update(task_id, description=desc)
+                proc_name = f"{event['database']}.{event['schema']}.{event['name']}"
+                current_phase[0] = ""
+                progress.update(task_id, description=proc_name)
+            elif stage == "phase":
+                phase = event.get("phase", "")
+                detail = event.get("detail")
+                if phase == "chunking":
+                    current_phase[0] = " → chunking"
+                elif phase == "embedding":
+                    current_phase[0] = f" → embedding ({detail})" if detail else " → embedding"
+                # Update description to include phase
+                current_desc = progress.tasks[task_id].description or ""
+                base_desc = current_desc.split(" → ")[0]
+                progress.update(task_id, description=f"{base_desc}{current_phase[0]}")
             elif stage == "proc_done":
                 # Advance by work_units (bytes when nz-mcp reports size_bytes,
                 # else 1) so a big SP moves the bar proportional to its effort.
