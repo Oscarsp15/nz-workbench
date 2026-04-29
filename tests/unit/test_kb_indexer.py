@@ -281,7 +281,16 @@ def test_bootstrap_emits_progress_events(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert total_updates[-1]["total"] == 10
 
     starts = [e for e in events if e["stage"] == "proc_start"]
-    assert starts == [{"stage": "proc_start", "database": "PROD_X", "schema": "DBO", "name": "SP1"}]
+    assert starts == [
+        {
+            "stage": "proc_start",
+            "database": "PROD_X",
+            "schema": "DBO",
+            "name": "SP1",
+            "proc_index": 1,
+            "proc_total": 1,
+        }
+    ]
 
     dones = [e for e in events if e["stage"] == "proc_done"]
     assert len(dones) == 1

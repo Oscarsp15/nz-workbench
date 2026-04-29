@@ -12,7 +12,6 @@ import typer
 from rich.console import Console
 from rich.progress import (
     BarColumn,
-    MofNCompleteColumn,
     Progress,
     SpinnerColumn,
     TextColumn,
@@ -62,7 +61,7 @@ def _print_hardware_info(console: Console) -> None:
 
 
 @contextmanager
-def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:
+def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:  # noqa: PLR0915
     """Render a Rich progress bar on stderr and yield a callback that drives it.
 
     Raises the root-logger level to WARNING while active so INFO events from
@@ -94,7 +93,7 @@ def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
-        MofNCompleteColumn(),
+        TextColumn("[progress.percentage]{task.fields[sp_progress]}"),
         TextColumn("•"),
         TimeElapsedColumn(),
         TextColumn("ETA"),
@@ -104,23 +103,31 @@ def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:
         refresh_per_second=4,
     )
 
-    # Track current phase for display
+    # Track current phase and SP counts for display
     current_phase: list[str] = [""]
+    sp_counts: dict[str, int] = {"current": 0, "total": 0}
 
     try:
         progress.start()
-        task_id = progress.add_task("Discovering procedures...", total=None)
+        task_id = progress.add_task("Discovering procedures...", total=None, sp_progress="")
 
         def _on_progress(event: kb_indexer.ProgressEvent) -> None:
             stage = event.get("stage")
             if stage == "total_update":
                 total = event.get("total")
+                proc_total = event.get("proc_total", 0)
+                sp_counts["total"] = proc_total
                 if isinstance(total, int):
                     progress.update(task_id, total=total)
             elif stage == "proc_start":
                 proc_name = f"{event['database']}.{event['schema']}.{event['name']}"
+                proc_index = event.get("proc_index", 0)
+                proc_total = event.get("proc_total", sp_counts["total"])
+                sp_counts["current"] = proc_index
+                sp_counts["total"] = proc_total
                 current_phase[0] = ""
-                progress.update(task_id, description=proc_name)
+                sp_progress = f"{proc_index}/{proc_total} SPs" if proc_total > 0 else ""
+                progress.update(task_id, description=proc_name, sp_progress=sp_progress)
             elif stage == "phase":
                 phase = event.get("phase", "")
                 detail = event.get("detail")
