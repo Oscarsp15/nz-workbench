@@ -139,7 +139,7 @@ def test_adversarial_strings_and_comments_do_not_crash(monkeypatch: pytest.Monke
 @settings(max_examples=60, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_property_does_not_drop_more_than_one_percent(body: str) -> None:
     original = chunker._count_tokens
-    chunker._count_tokens = _wc_tokens
+    chunker._count_tokens = _wc_tokens  # type: ignore[assignment]
     try:
         chunks = chunker.chunk(body)
         reconstructed = _reconstruct_by_string_overlap(chunks)
@@ -162,7 +162,7 @@ def test_chunk_enforces_max_tokens_on_monolithic_body() -> None:
     """
 
     original = chunker._count_tokens
-    chunker._count_tokens = _wc_tokens
+    chunker._count_tokens = _wc_tokens  # type: ignore[assignment]
     try:
         # 12000 whitespace-separated words, no semicolons, no BEGIN/END — the
         # chunker's logical splitter has nothing to latch onto, so the ceiling
