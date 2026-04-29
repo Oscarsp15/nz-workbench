@@ -167,7 +167,7 @@ class _FakeNzMcpClient:
                             }
                         ],
                         "count": 1,
-                        "duration_ms": 10
+                        "duration_ms": 10,
                     },
                     error_code=None,
                     error_context=None,
@@ -581,6 +581,7 @@ def test_bootstrap_fallback_to_individual_ddl(
 
     # Force batch to fail with UNKNOWN_TOOL
     original_call = fake_client.call
+
     def fallback_call(tool: str, arguments: dict[str, Any]) -> ToolResult:
         if tool == "nz_get_procedures_ddl_batch":
             return ToolResult(
@@ -624,4 +625,3 @@ def test_bootstrap_fallback_to_individual_ddl(
     assert r1.errors == []
     # Individual fetch is used
     assert fake_client.get_ddl_calls == 1
-
