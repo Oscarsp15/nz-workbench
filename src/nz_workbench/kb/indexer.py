@@ -469,7 +469,7 @@ def _index_one(
     # Remove prior chunks to avoid stale chunk IDs when chunk counts shrink.
     chroma.delete_by_procedure(proc.database, proc.schema, proc.name)
 
-    ddl_lines = ddl.count('\n') + 1
+    ddl_lines = ddl.count("\n") + 1
     ddl_chars = len(ddl)
 
     t_chunk_start = time.perf_counter()

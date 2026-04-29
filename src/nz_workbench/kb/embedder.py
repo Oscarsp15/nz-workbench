@@ -20,7 +20,7 @@ _ENV_DEVICE: Final[str] = "NZ_WORKBENCH_EMBED_DEVICE"  # "cpu" | "cuda" | "" (au
 _EXPECTED_DIM: Final[int] = 1024
 
 # VRAM thresholds for batch size selection (in GB)
-_VRAM_HIGH: Final[int] = 8    # 8GB+ VRAM: batch_size=32
+_VRAM_HIGH: Final[int] = 8  # 8GB+ VRAM: batch_size=32
 _VRAM_MEDIUM: Final[int] = 6  # 6GB+ VRAM: batch_size=16
 
 _TORCH: Any | None = None
@@ -68,7 +68,7 @@ def _default_batch_size() -> int:
     try:
         # Get total VRAM in GB
         vram_bytes = _TORCH.cuda.get_device_properties(0).total_memory
-        vram_gb = vram_bytes / (1024 ** 3)
+        vram_gb = vram_bytes / (1024**3)
 
         if vram_gb >= _VRAM_HIGH:
             return 32
