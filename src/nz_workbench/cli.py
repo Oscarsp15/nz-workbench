@@ -56,8 +56,9 @@ def _print_hardware_info(console: Console) -> None:
         device_info = f"[green]CUDA[/green] ({hw.gpu_name}{vram_str})"
     else:
         device_info = "[yellow]CPU[/yellow]"
-    console.print(f"Device: {device_info} │ Batch: {hw.batch_size}")
-    console.print("─" * 50)
+    emit = console.print  # noqa: T201 - CLI output, not debug print
+    emit(f"Device: {device_info} │ Batch: {hw.batch_size}")
+    emit("─" * 50)
 
 
 @contextmanager
