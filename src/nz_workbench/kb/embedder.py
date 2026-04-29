@@ -184,4 +184,43 @@ def make_embedder(model_name: str = "BAAI/bge-m3") -> Embedder:
     return SentenceTransformerEmbedder(model_name=model_name)
 
 
-__all__ = ["Embedder", "SentenceTransformerEmbedder", "make_embedder"]
+@dataclass(frozen=True, slots=True)
+class HardwareInfo:
+    """Hardware information for display purposes."""
+
+    device: str  # "cuda" or "cpu"
+    gpu_name: str | None  # e.g., "NVIDIA GeForce GTX 1650 Ti"
+    vram_gb: float | None  # e.g., 4.0
+    batch_size: int
+
+
+def get_hardware_info() -> HardwareInfo:
+    """Return hardware configuration that will be used for embedding."""
+    device = _resolve_device()
+    batch = _batch_size()
+    gpu_name: str | None = None
+    vram_gb: float | None = None
+
+    if device == "cuda" and _TORCH is not None:
+        try:
+            props = _TORCH.cuda.get_device_properties(0)
+            gpu_name = props.name
+            vram_gb = round(props.total_memory / (1024**3), 1)
+        except Exception:
+            _log.debug("get_hardware_info_gpu_failed", exc_info=True)
+
+    return HardwareInfo(
+        device=device,
+        gpu_name=gpu_name,
+        vram_gb=vram_gb,
+        batch_size=batch,
+    )
+
+
+__all__ = [
+    "Embedder",
+    "HardwareInfo",
+    "SentenceTransformerEmbedder",
+    "get_hardware_info",
+    "make_embedder",
+]
