@@ -33,11 +33,10 @@ ProgressEvent = dict[str, Any]
 
 Shapes (``stage`` is always present):
 
-- ``{"stage": "total_update", "total": int}`` — total work units discovered so
-  far. Work units default to the sum of ``size_bytes`` across procedures so
-  that a huge SP advances the bar proportionally; when size is missing each
-  proc counts as ``1`` (falls back to count-based progress).
-- ``{"stage": "proc_start", "database": str, "schema": str, "name": str}``.
+- ``{"stage": "total_update", "total": int, "proc_total": int}`` — total work
+  units discovered so far (bytes), plus total procedure count for display.
+- ``{"stage": "proc_start", "database": str, "schema": str, "name": str,
+     "proc_index": int, "proc_total": int}`` — includes 1-based index for display.
 - ``{"stage": "proc_done", "database": str, "schema": str, "name": str,
      "chunks": int, "indexed": bool, "skipped": bool, "error": str | None,
      "work_units": int}``. ``work_units`` is the size that should advance the
@@ -219,13 +218,15 @@ def _index_procedures(
     embedder: Embedder,
     batch_ddls: dict[str, str] | None = None,
     on_progress: ProgressCallback | None = None,
+    proc_offset: int = 0,
+    proc_total: int = 0,
 ) -> tuple[int, int, int, list[str]]:
     indexed = 0
     skipped = 0
     chunks_written = 0
     errors: list[str] = []
 
-    for proc in procs:
+    for i, proc in enumerate(procs):
         key = ProcedureKey(
             database=proc.database,
             schema=proc.schema,
@@ -233,6 +234,7 @@ def _index_procedures(
             signature=proc.signature,
         )
         work_units = _work_units(proc)
+        current_index = proc_offset + i + 1  # 1-based for display
         if on_progress is not None:
             on_progress(
                 {
@@ -240,6 +242,8 @@ def _index_procedures(
                     "database": proc.database,
                     "schema": proc.schema,
                     "name": proc.name,
+                    "proc_index": current_index,
+                    "proc_total": proc_total,
                 }
             )
 
@@ -564,6 +568,8 @@ def bootstrap(  # noqa: PLR0912, PLR0915
     procedures_skipped = 0
     chunks_written = 0
     total_discovered = 0
+    proc_count_discovered = 0  # Total procedure count for display
+    proc_count_processed = 0  # Running count of processed procedures
 
     cfg = load_config()
     metadata = MetadataStore(cfg.state_dir / "metadata.sqlite")
@@ -627,8 +633,15 @@ def bootstrap(  # noqa: PLR0912, PLR0915
                         procs = updated_procs
 
                 total_discovered += sum(_work_units(p) for p in procs)
+                proc_count_discovered += len(procs)
                 if on_progress is not None:
-                    on_progress({"stage": "total_update", "total": total_discovered})
+                    on_progress(
+                        {
+                            "stage": "total_update",
+                            "total": total_discovered,
+                            "proc_total": proc_count_discovered,
+                        }
+                    )
 
                 newly_indexed, newly_skipped, newly_chunks, proc_errors = _index_procedures(
                     procs=procs,
@@ -638,7 +651,10 @@ def bootstrap(  # noqa: PLR0912, PLR0915
                     embedder=embedder,
                     batch_ddls=batch_ddls,
                     on_progress=on_progress,
+                    proc_offset=proc_count_processed,
+                    proc_total=proc_count_discovered,
                 )
+                proc_count_processed += len(procs)
                 procedures_indexed += newly_indexed
                 procedures_skipped += newly_skipped
                 chunks_written += newly_chunks
