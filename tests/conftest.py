@@ -5,6 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import structlog
+
+
+@pytest.fixture(autouse=True)
+def _reset_structlog_cache() -> None:
+    """Reset structlog logger cache between tests to prevent test pollution.
+
+    When configure_logging_for_stdio() is called, structlog caches loggers that
+    reference sys.stderr. If a test framework redirects stderr, the cached logger
+    keeps a reference to the old (now closed) file handle, causing ValueError on
+    subsequent log writes.
+    """
+    structlog.reset_defaults()
 
 
 @pytest.fixture
