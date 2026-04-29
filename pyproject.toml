@@ -145,7 +145,10 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["src/nz_workbench"]
-omit = ["*/__main__.py"]
+omit = [
+    "*/__main__.py",
+    "*/mcp_server.py",  # MCP server is integration-tested with Claude CLI
+]
 
 [tool.coverage.report]
 exclude_lines = [
