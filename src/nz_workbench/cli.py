@@ -101,6 +101,22 @@ class _ProgressState:
         return int(100 * self.sp_current / self.sp_total)
 
 
+class _LivePanel:
+    """A renderable that updates the spinner on each render cycle."""
+
+    SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, state: _ProgressState) -> None:
+        self.state = state
+        self._frame = 0
+
+    def __rich_console__(self, console: Console, options: object) -> Iterator[Panel]:
+        del console, options  # Unused but required by Rich protocol
+        """Yield a Panel with the current state and animated spinner."""
+        self._frame = (self._frame + 1) % len(self.SPINNER_CHARS)
+        yield _build_panel(self.state, self.SPINNER_CHARS[self._frame])
+
+
 def _build_panel(state: _ProgressState, spinner_frame: str) -> Panel:
     """Build the Rich Panel for the current progress state."""
     lines: list[Text | str] = []
@@ -189,15 +205,10 @@ def _progress_context(  # noqa: PLR0915
 
     console = Console(stderr=True, force_terminal=True)
     state = _ProgressState(database or "...")
-    spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    spinner_idx = [0]
-
-    def _render() -> Panel:
-        spinner_idx[0] = (spinner_idx[0] + 1) % len(spinner_chars)
-        return _build_panel(state, spinner_chars[spinner_idx[0]])
+    live_panel = _LivePanel(state)
 
     try:
-        with Live(_render(), console=console, refresh_per_second=4, transient=True) as live:
+        with Live(live_panel, console=console, refresh_per_second=4, transient=True) as live:  # noqa: F841 - live is used implicitly
 
             def _on_progress(event: kb_indexer.ProgressEvent) -> None:
                 stage = event.get("stage")
@@ -229,8 +240,7 @@ def _progress_context(  # noqa: PLR0915
                     units = event.get("work_units", 0)
                     if isinstance(units, int):
                         state.bytes_processed += units
-
-                live.update(_render())
+                # State is updated; Live will re-render on next refresh cycle
 
             yield _on_progress
     finally:
