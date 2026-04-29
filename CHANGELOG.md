@@ -6,6 +6,10 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) y el p
 
 ## [Unreleased]
 
+### Changed
+- ES: `kb-bootstrap` ahora usa `nz_get_procedures_ddl_batch` para obtener los DDL de un schema en una sola query, reduciendo el número de consultas al servidor Netezza de N a 1 por schema. Fallback automático a extracción individual si la tool batch no está disponible.
+- EN: `kb-bootstrap` now uses `nz_get_procedures_ddl_batch` to fetch all schema DDLs in a single query, reducing queries to the Netezza server from N to 1 per schema. Automatically falls back to individual DDL extraction if the batch tool is unavailable.
+
 ### Added
 - ES: bootstrap inicial del proyecto — `AGENTS.md`, docs de arquitectura, standards, templates de RENs, skeleton de código, scripts CI.
 - EN: initial project bootstrap — `AGENTS.md`, architecture docs, standards, REN templates, code skeleton, CI scripts.

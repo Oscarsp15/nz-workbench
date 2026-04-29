@@ -86,6 +86,7 @@ class _FakeNzMcpClient:
     def __init__(self, bin_path: str) -> None:
         self.bin_path = bin_path
         self.get_ddl_calls = 0
+        self.get_ddl_batch_calls = 0
 
     def start(self) -> None:
         return
@@ -151,6 +152,32 @@ class _FakeNzMcpClient:
                 error_code=None,
                 error_context=None,
             )
+        if tool == "nz_get_procedures_ddl_batch":
+            self.get_ddl_batch_calls += 1
+            if arguments.get("schema") == "DBO":
+                return ToolResult(
+                    ok=True,
+                    result={
+                        "procedures": [
+                            {
+                                "name": "SP1",
+                                "ddl": "BEGIN\nSELECT 1;\nEND;\n",
+                                "last_altered": "2026-01-01T00:00:00Z",
+                                "size_bytes": 10,
+                            }
+                        ],
+                        "count": 1,
+                        "duration_ms": 10
+                    },
+                    error_code=None,
+                    error_context=None,
+                )
+            return ToolResult(
+                ok=False,
+                result=None,
+                error_code="UNKNOWN_TOOL",
+                error_context={"tool": tool, "arguments": arguments},
+            )
         return ToolResult(
             ok=False,
             result=None,
@@ -196,12 +223,12 @@ def test_bootstrap_indexes_and_skips_by_last_altered(
     r1 = indexer.bootstrap(["PROD_X"])
     assert r1.procedures_indexed == 1
     assert r1.errors == []
-    assert fake_client.get_ddl_calls == 1
+    assert fake_client.get_ddl_batch_calls == 1
 
     r2 = indexer.bootstrap(["PROD_X"])
     assert r2.procedures_indexed == 0
     assert r2.procedures_skipped == 1
-    assert fake_client.get_ddl_calls == 1  # last_altered skip avoids re-fetching DDL
+    assert fake_client.get_ddl_batch_calls == 2  # Fetched batch but skipped local indexing
 
 
 @pytest.mark.unit
@@ -385,7 +412,7 @@ def test_bootstrap_invalidates_skip_when_chunker_version_drifts(
     # First bootstrap at the current chunker version indexes normally.
     r1 = indexer.bootstrap(["PROD_X"])
     assert r1.procedures_indexed == 1
-    assert fake_client.get_ddl_calls == 1
+    assert fake_client.get_ddl_batch_calls == 1
 
     # Simulate a legacy index (chunker v0) while last_altered still matches PROD.
     key = ProcedureKey(database="PROD_X", schema="DBO", name="SP1", signature="()")
@@ -395,7 +422,7 @@ def test_bootstrap_invalidates_skip_when_chunker_version_drifts(
     r2 = indexer.bootstrap(["PROD_X"])
     assert r2.procedures_indexed == 1, "chunker_version drift must invalidate bootstrap skip"
     assert r2.procedures_skipped == 0
-    assert fake_client.get_ddl_calls == 2
+    assert fake_client.get_ddl_batch_calls == 2
 
 
 @pytest.mark.unit
@@ -505,3 +532,94 @@ def test_refresh_one_surfaces_ddl_fetch_failure(
     assert done["error"] is not None
     assert done["indexed"] is False
     assert done["skipped"] is False
+
+
+@pytest.mark.unit
+def test_bootstrap_uses_batch_ddl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake_meta = _FakeMetadataStore(tmp_path / "metadata.sqlite")
+    fake_client = _FakeNzMcpClient(bin_path="nz-mcp")
+
+    def _meta_factory(_p: Path) -> _FakeMetadataStore:
+        return fake_meta
+
+    def _chroma_factory(root: Path) -> _FakeChromaStore:
+        return _FakeChromaStore(root)
+
+    def _client_factory(*, bin_path: str) -> _FakeNzMcpClient:
+        return fake_client
+
+    monkeypatch.setattr(
+        indexer,
+        "load_config",
+        lambda: _Cfg(state_dir=tmp_path, nz_mcp_bin="nz-mcp", embedder_model="BAAI/bge-m3"),
+    )
+    monkeypatch.setattr(indexer, "MetadataStore", _meta_factory)
+    monkeypatch.setattr(indexer, "ChromaStore", _chroma_factory)
+    monkeypatch.setattr(indexer, "NzMcpClient", _client_factory)
+    monkeypatch.setattr(indexer, "make_embedder", lambda _name: _FakeEmbedder())
+    monkeypatch.setattr(
+        indexer,
+        "chunk",
+        lambda _ddl: [
+            type("C", (), {"text": "x", "line_from": 1, "line_to": 1, "section_hint": "body"})()
+        ],
+    )
+
+    r1 = indexer.bootstrap(["PROD_X"])
+    assert r1.procedures_indexed == 1
+    assert r1.errors == []
+    assert fake_client.get_ddl_batch_calls == 1
+    assert fake_client.get_ddl_calls == 0
+
+
+@pytest.mark.unit
+def test_bootstrap_fallback_to_individual_ddl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake_meta = _FakeMetadataStore(tmp_path / "metadata.sqlite")
+    fake_client = _FakeNzMcpClient(bin_path="nz-mcp")
+
+    # Force batch to fail with UNKNOWN_TOOL
+    original_call = fake_client.call
+    def fallback_call(tool: str, arguments: dict[str, Any]) -> ToolResult:
+        if tool == "nz_get_procedures_ddl_batch":
+            return ToolResult(
+                ok=False,
+                result=None,
+                error_code="UNKNOWN_TOOL",
+                error_context={"tool": tool},
+            )
+        return original_call(tool, arguments)
+
+    fake_client.call = fallback_call  # type: ignore
+
+    def _meta_factory(_p: Path) -> _FakeMetadataStore:
+        return fake_meta
+
+    def _chroma_factory(root: Path) -> _FakeChromaStore:
+        return _FakeChromaStore(root)
+
+    def _client_factory(*, bin_path: str) -> _FakeNzMcpClient:
+        return fake_client
+
+    monkeypatch.setattr(
+        indexer,
+        "load_config",
+        lambda: _Cfg(state_dir=tmp_path, nz_mcp_bin="nz-mcp", embedder_model="BAAI/bge-m3"),
+    )
+    monkeypatch.setattr(indexer, "MetadataStore", _meta_factory)
+    monkeypatch.setattr(indexer, "ChromaStore", _chroma_factory)
+    monkeypatch.setattr(indexer, "NzMcpClient", _client_factory)
+    monkeypatch.setattr(indexer, "make_embedder", lambda _name: _FakeEmbedder())
+    monkeypatch.setattr(
+        indexer,
+        "chunk",
+        lambda _ddl: [
+            type("C", (), {"text": "x", "line_from": 1, "line_to": 1, "section_hint": "body"})()
+        ],
+    )
+
+    r1 = indexer.bootstrap(["PROD_X"])
+    assert r1.procedures_indexed == 1
+    assert r1.errors == []
+    # Individual fetch is used
+    assert fake_client.get_ddl_calls == 1
+

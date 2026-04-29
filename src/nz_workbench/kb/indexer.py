@@ -22,6 +22,7 @@ _log = structlog.get_logger(__name__)
 
 _TOOL_LIST_PROCS: Final[str] = "nz_list_procedures"
 _TOOL_GET_DDL: Final[str] = "nz_get_procedure_ddl"
+_TOOL_GET_ALL_DDL: Final[str] = "nz_get_procedures_ddl_batch"
 _TOOL_LIST_SCHEMAS: Final[str] = "nz_list_schemas"
 _QUAL_DB_SCHEMA_OBJ: Final[int] = 3
 _QUAL_SCHEMA_OBJ: Final[int] = 2
@@ -139,6 +140,17 @@ def _parse_proc_list(database: str, schema: str, raw: list[dict[str, Any]]) -> l
     return procs
 
 
+def _fetch_all_procedures_ddl(client: NzMcpClient, database: str, schema: str) -> dict[str, Any] | None:
+    """Intenta batch; retorna None si la tool no existe."""
+    res = client.call(_TOOL_GET_ALL_DDL, {"database": database, "schema": schema})
+    if res.error_code in ("TOOL_NOT_FOUND", "UNKNOWN_TOOL"):
+        return None
+    if not res.ok:
+        _log.warning("kb_bootstrap_batch_ddl_failed", database=database, schema=schema, error=res.error_code)
+        return None
+    return res.result
+
+
 def _list_schema_names(client: NzMcpClient, database: str) -> tuple[list[str], str | None]:
     schemas_res = _call_with_fallbacks(
         client,
@@ -195,6 +207,7 @@ def _index_procedures(
     chroma: ChromaStore,
     metadata: MetadataStore,
     embedder: Embedder,
+    batch_ddls: dict[str, str] | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> tuple[int, int, int, list[str]]:
     indexed = 0
@@ -254,12 +267,14 @@ def _index_procedures(
             schema=proc.schema,
             procedure=proc.name,
         )
+        proc_ddl = batch_ddls.get(proc.name) if batch_ddls is not None else None
         did_index, chunks, err = _index_one(
             client=client,
             chroma=chroma,
             metadata=metadata,
             embedder=embedder,
             proc=proc,
+            ddl=proc_ddl,
         )
         if err is not None:
             errors.append(err)
@@ -401,6 +416,7 @@ def _index_one(
     metadata: MetadataStore,
     embedder: Embedder,
     proc: _ProcInfo,
+    ddl: str | None = None,
 ) -> tuple[int, int, str | None]:
     key = ProcedureKey(
         database=proc.database,
@@ -409,24 +425,25 @@ def _index_one(
         signature=proc.signature,
     )
 
-    ddl_res = _call_with_fallbacks(
-        client,
-        _TOOL_GET_DDL,
-        [
-            {"database": proc.database, "schema": proc.schema, "procedure": proc.name},
-            {"database": proc.database, "schema": proc.schema, "name": proc.name},
-            {"database": proc.database, "procedure": f"{proc.schema}.{proc.name}"},
-            {"database": proc.database, "target": f"{proc.schema}.{proc.name}"},
-        ],
-    )
-    ddl = _extract_text(ddl_res, keys=("ddl", "body", "source"))
     if ddl is None:
-        detail = f"{proc.database}.{proc.schema}.{proc.name}"
-        return (
-            0,
-            0,
-            f"failed to fetch DDL for {detail}: {ddl_res.error_code}",
+        ddl_res = _call_with_fallbacks(
+            client,
+            _TOOL_GET_DDL,
+            [
+                {"database": proc.database, "schema": proc.schema, "procedure": proc.name},
+                {"database": proc.database, "schema": proc.schema, "name": proc.name},
+                {"database": proc.database, "procedure": f"{proc.schema}.{proc.name}"},
+                {"database": proc.database, "target": f"{proc.schema}.{proc.name}"},
+            ],
         )
+        ddl = _extract_text(ddl_res, keys=("ddl", "body", "source"))
+        if ddl is None:
+            detail = f"{proc.database}.{proc.schema}.{proc.name}"
+            return (
+                0,
+                0,
+                f"failed to fetch DDL for {detail}: {ddl_res.error_code}",
+            )
 
     body_hash = _sha256(ddl)
     previous_hash = metadata.get_body_sha256(key)
@@ -525,6 +542,37 @@ def bootstrap(
                     procs.sort(key=lambda p: p.size_bytes or 0, reverse=True)
                     procs = procs[:top_n]
 
+                batch_res = _fetch_all_procedures_ddl(client, db, schema_name)
+                batch_ddls: dict[str, str] | None = None
+                if batch_res is not None:
+                    batch_procs = batch_res.get("procedures")
+                    if isinstance(batch_procs, list):
+                        batch_ddls = {}
+                        updated_procs = []
+                        for p in procs:
+                            updated_p = p
+                            for item in batch_procs:
+                                if not isinstance(item, dict):
+                                    continue
+                                item_name = str(item.get("name") or "").strip()
+                                if item_name == p.name:
+                                    last_alt = str(item.get("last_altered") or "")
+                                    ddl_str = str(item.get("ddl") or "")
+                                    if ddl_str:
+                                        batch_ddls[item_name] = ddl_str
+                                    if last_alt:
+                                        updated_p = _ProcInfo(
+                                            database=p.database,
+                                            schema=p.schema,
+                                            name=p.name,
+                                            signature=p.signature,
+                                            last_altered=last_alt,
+                                            size_bytes=p.size_bytes,
+                                        )
+                                    break
+                            updated_procs.append(updated_p)
+                        procs = updated_procs
+
                 total_discovered += sum(_work_units(p) for p in procs)
                 if on_progress is not None:
                     on_progress({"stage": "total_update", "total": total_discovered})
@@ -535,6 +583,7 @@ def bootstrap(
                     chroma=chroma,
                     metadata=metadata,
                     embedder=embedder,
+                    batch_ddls=batch_ddls,
                     on_progress=on_progress,
                 )
                 procedures_indexed += newly_indexed
