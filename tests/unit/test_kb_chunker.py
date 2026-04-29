@@ -184,3 +184,58 @@ def test_chunker_version_is_positive_int() -> None:
 
     assert isinstance(chunker.CHUNKER_VERSION, int)
     assert chunker.CHUNKER_VERSION >= 1
+
+
+@pytest.mark.unit
+def test_large_sp_10k_lines_never_exceeds_max_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test for Issue #20: SPs with 10000+ lines must never produce
+    a chunk exceeding MAX_TOKENS (BGE-M3 would truncate or raise a warning)."""
+
+    monkeypatch.setattr(chunker, "_count_tokens", _wc_tokens)
+
+    # Simulates a real large SP: header, DECLARE block, many assignments, END.
+    lines = ["CREATE PROCEDURE PI_CONTINGENCIA_RIESGOS_MOTOR() RETURNS INT AS"]
+    lines.append("DECLARE")
+    for i in range(2000):
+        lines.append(f"  v_var_{i} INT;")
+    lines.append("BEGIN")
+    for i in range(8000):
+        lines.append(f"  v_var_{i % 2000} := {i};")
+    lines.append("END;")
+    body = "\n".join(lines)
+
+    chunks = chunker.chunk(body)
+    assert chunks, "chunker must produce at least one chunk for a large SP"
+    for ch in chunks:
+        tok_count = _wc_tokens(ch.text)
+        assert tok_count <= chunker.MAX_TOKENS, (
+            f"chunk exceeded MAX_TOKENS={chunker.MAX_TOKENS}: got {tok_count}. "
+            "BGE-M3 would truncate this chunk silently."
+        )
+
+
+@pytest.mark.unit
+def test_bge_max_tokens_constant_exists() -> None:
+    """BGE_MAX_TOKENS must be exported and set to 8192 (BGE-M3 hard limit)."""
+
+    assert hasattr(chunker, "BGE_MAX_TOKENS")
+    assert chunker.BGE_MAX_TOKENS == 8192
+    # MAX_TOKENS (our soft ceiling) must be safely below the hard limit.
+    assert chunker.MAX_TOKENS < chunker.BGE_MAX_TOKENS
+
+
+@pytest.mark.unit
+def test_hard_split_text_guarantees_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every piece produced by _hard_split_text must respect max_tokens."""
+
+    monkeypatch.setattr(chunker, "_count_tokens", _wc_tokens)
+    # 5000 words with no whitespace-friendly breakpoints inside long tokens.
+    text = " ".join(f"tok{i}" for i in range(5000))
+    pieces = chunker._hard_split_text(text, max_tokens=200)
+
+    assert pieces, "_hard_split_text must return at least one piece"
+    for piece in pieces:
+        assert _wc_tokens(piece) <= 200, (
+            f"_hard_split_text returned a piece with {_wc_tokens(piece)} tokens "
+            f"(max_tokens=200): {piece[:80]!r}..."
+        )

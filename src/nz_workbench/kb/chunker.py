@@ -21,10 +21,12 @@ OVERLAP_TOKENS: Final[int] = 50
 # on queries matching that zone. We pick 2000 to leave headroom while keeping
 # blocks large enough to preserve semantic context.
 MAX_TOKENS: Final[int] = 2000
+# Absolute BGE-M3 model limit — we never emit a chunk larger than this.
+BGE_MAX_TOKENS: Final[int] = 8192
 
 # Bumped whenever the chunker output can change for the same input. Stored per
 # procedure in the metadata DB; the indexer re-chunks+re-embeds when it drifts.
-CHUNKER_VERSION: Final[int] = 1
+CHUNKER_VERSION: Final[int] = 2
 
 _DEFAULT_TOKENIZER_MODEL: Final[str] = "BAAI/bge-m3"
 _ENV_TOKENIZER_MODEL: Final[str] = "NZ_WORKBENCH_TOKENIZER_MODEL"
@@ -81,7 +83,17 @@ def _get_tokenizer() -> object:
 @lru_cache(maxsize=4096)
 def _count_tokens(text: str) -> int:
     tok = _get_tokenizer()
-    encoded = tok.encode(text, add_special_tokens=False)  # type: ignore[attr-defined]
+    # Suppress the HuggingFace "Token indices sequence length is longer than..."
+    # UserWarning that is printed to stderr and breaks Rich progress bars.
+    _prev = os.environ.get("TRANSFORMERS_VERBOSITY")
+    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+    try:
+        encoded = tok.encode(text, add_special_tokens=False)  # type: ignore[attr-defined]
+    finally:
+        if _prev is None:
+            os.environ.pop("TRANSFORMERS_VERBOSITY", None)
+        else:
+            os.environ["TRANSFORMERS_VERBOSITY"] = _prev
     return len(encoded)
 
 
@@ -489,7 +501,8 @@ def _hard_split_text(text: str, max_tokens: int) -> list[str]:
 
     Prefers whitespace cuts near the estimated token-ratio target; falls back
     to character slicing if whitespace boundaries don't converge. Guarantees
-    termination and progress: every iteration consumes ≥ 1 character.
+    termination, progress (every iteration consumes ≥ 1 character), and the
+    invariant that *every emitted piece* has ≤ ``max_tokens`` tokens.
     """
 
     if _count_tokens(text) <= max_tokens:
@@ -514,19 +527,36 @@ def _hard_split_text(text: str, max_tokens: int) -> list[str]:
         if remaining[back : back + 1].isspace():
             cut = back
 
-        # Guarantee the left half is under the ceiling; shrink if tokenization
-        # came out above estimate.
+        # Guarantee the left half is under the ceiling; shrink iteratively.
+        # Use bisection when repeated 0.9x scaling stalls (e.g. no whitespace).
+        lo, hi = 1, cut
         while cut > 1 and _count_tokens(remaining[:cut]) > max_tokens:
-            cut = max(1, int(cut * 0.9))
+            hi = cut
+            cut = max(1, (lo + hi) // 2)
+            if hi - lo <= 1:
+                # Bisection converged — take the guaranteed-safe lo side.
+                cut = lo
+                break
 
         if cut <= 0:
-            break
+            # Last-resort: consume at least one character to guarantee progress.
+            cut = 1
 
-        pieces.append(remaining[:cut])
+        left = remaining[:cut]
+        # Final safety check: if somehow left still exceeds max_tokens (should
+        # not happen after bisection, but defensively handle it), recurse.
+        if _count_tokens(left) > max_tokens:
+            pieces.extend(_hard_split_text(left, max_tokens))
+        else:
+            pieces.append(left)
         remaining = remaining[cut:]
 
     if remaining:
-        pieces.append(remaining)
+        # Apply same guarantee to tail piece.
+        if _count_tokens(remaining) > max_tokens:
+            pieces.extend(_hard_split_text(remaining, max_tokens))
+        else:
+            pieces.append(remaining)
     return pieces
 
 
@@ -569,6 +599,7 @@ def chunk(body: str) -> list[Chunk]:
 
 
 __all__ = [
+    "BGE_MAX_TOKENS",
     "CHUNKER_VERSION",
     "MAX_TOKENS",
     "OVERLAP_TOKENS",
