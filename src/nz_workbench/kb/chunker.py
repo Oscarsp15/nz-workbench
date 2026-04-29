@@ -78,6 +78,7 @@ def _get_tokenizer() -> object:
     return auto_tok.from_pretrained(model_name)
 
 
+@lru_cache(maxsize=4096)
 def _count_tokens(text: str) -> int:
     tok = _get_tokenizer()
     encoded = tok.encode(text, add_special_tokens=False)  # type: ignore[attr-defined]
