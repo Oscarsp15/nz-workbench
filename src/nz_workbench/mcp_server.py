@@ -74,7 +74,7 @@ def _ensure_learnings_db() -> None:
     conn.close()
 
 
-@server.list_tools()
+@server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
 async def list_tools() -> list[Tool]:
     """List available tools."""
     return [
@@ -197,14 +197,15 @@ _TOOL_HANDLERS: dict[str, Any] = {
 }
 
 
-@server.call_tool()
+@server.call_tool()  # type: ignore[untyped-decorator]
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle tool calls."""
     handler_name = _TOOL_HANDLERS.get(name)
     if handler_name is None:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
     handler = globals()[handler_name]
-    return await handler(arguments)
+    result: list[TextContent] = await handler(arguments)
+    return result
 
 
 async def _handle_get_sp_context(args: dict[str, Any]) -> list[TextContent]:
@@ -303,8 +304,13 @@ async def _handle_search(args: dict[str, Any]) -> list[TextContent]:
         output_parts = [f"# Search Results for: {query}\n"]
         seen: set[str] = set()
 
-        metadatas = results["metadatas"][0]
-        documents = results["documents"][0]
+        metadatas_list = results.get("metadatas")
+        documents_list = results.get("documents")
+        if not metadatas_list or not documents_list:
+            return [TextContent(type="text", text="No results found.")]
+
+        metadatas = metadatas_list[0]
+        documents = documents_list[0]
         for meta, doc in zip(metadatas, documents, strict=True):
             db_name = meta.get("database", "?")
             schema_name = meta.get("schema", "?")
