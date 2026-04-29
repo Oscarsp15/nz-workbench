@@ -19,7 +19,11 @@ class _Cfg:
 
 
 class _FakeEmbedder:
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(
+        self,
+        texts: list[str],
+        on_batch_progress: object = None,  # noqa: ARG002
+    ) -> list[list[float]]:
         return [[0.0, 0.0, 0.0] for _ in texts]
 
 

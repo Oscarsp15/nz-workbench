@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Final, Protocol, cast
 
@@ -42,10 +43,18 @@ else:
     _SENTENCE_TRANSFORMER = _ImportedSentenceTransformer
 
 
+EmbedProgressCallback = Callable[[int, int], None]
+"""Callback for embedding batch progress: (current_batch, total_batches)."""
+
+
 class Embedder(Protocol):
     """Minimal embedder contract used across the KB module."""
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(
+        self,
+        texts: list[str],
+        on_batch_progress: EmbedProgressCallback | None = None,
+    ) -> list[list[float]]:
         """Return one 1024-dim vector per input text."""
         ...
 
@@ -133,7 +142,11 @@ class SentenceTransformerEmbedder:
             duration_ms=round(duration_ms, 2),
         )
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(
+        self,
+        texts: list[str],
+        on_batch_progress: EmbedProgressCallback | None = None,
+    ) -> list[list[float]]:
         if not texts:
             return []
 
@@ -143,10 +156,16 @@ class SentenceTransformerEmbedder:
 
         batch = _batch_size()
         vectors: list[list[float]] = []
+        total_batches = (len(texts) + batch - 1) // batch
 
-        for start in range(0, len(texts), batch):
+        for batch_idx, start in enumerate(range(0, len(texts), batch)):
             end = min(start + batch, len(texts))
             chunk = texts[start:end]
+
+            # Report batch progress before processing
+            if on_batch_progress is not None:
+                on_batch_progress(batch_idx + 1, total_batches)
+
             t0 = time.perf_counter()
 
             # SentenceTransformer.encode returns np.ndarray or list depending on config.
@@ -163,6 +182,7 @@ class SentenceTransformerEmbedder:
             _log.info(
                 "embedder_batch_done",
                 n_texts=len(chunk),
+                batch=f"{batch_idx + 1}/{total_batches}",
                 duration_ms=round(duration_ms, 2),
             )
 
@@ -218,6 +238,7 @@ def get_hardware_info() -> HardwareInfo:
 
 
 __all__ = [
+    "EmbedProgressCallback",
     "Embedder",
     "HardwareInfo",
     "SentenceTransformerEmbedder",

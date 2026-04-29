@@ -44,6 +44,8 @@ Shapes (``stage`` is always present):
 - ``{"stage": "phase", "phase": str, "detail": str | None}`` — sub-phase within
   a procedure: "chunking", "embedding". ``detail`` may contain extra info like
   batch progress.
+- ``{"stage": "embed_batch", "current": int, "total": int}`` — embedding batch
+  progress within a procedure.
 """
 
 
@@ -497,8 +499,18 @@ def _index_one(
             }
         )
 
+    def _on_batch(current: int, total: int) -> None:
+        if on_progress is not None:
+            on_progress(
+                {
+                    "stage": "embed_batch",
+                    "current": current,
+                    "total": total,
+                }
+            )
+
     t_embed_start = time.perf_counter()
-    vectors = embedder.embed([c.text for c in chunks])
+    vectors = embedder.embed([c.text for c in chunks], on_batch_progress=_on_batch)
     t_embed_ms = (time.perf_counter() - t_embed_start) * 1000
 
     _log.debug(

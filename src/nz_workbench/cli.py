@@ -82,6 +82,8 @@ class _ProgressState:
         self.current_sp_name = ""
         self.phase = ""  # "chunking" | "embedding" | ""
         self.chunk_count = 0
+        self.embed_batch_current = 0
+        self.embed_batch_total = 0
         self.start_time = time.perf_counter()
 
     def elapsed(self) -> float:
@@ -163,7 +165,22 @@ def _build_panel(state: _ProgressState, spinner_frame: str) -> Panel:
         elif state.phase == "embedding":
             chunk_info = f"{state.chunk_count} chunks" if state.chunk_count else "done"
             lines.append(Text.from_markup(f"     [green]✓[/green] Chunking   → {chunk_info}"))
-            embed_line = f"     [{spinner_frame}] [yellow]Embedding[/yellow] → {state.chunk_count}"
+            # Build mini progress bar for embedding batches
+            if state.embed_batch_total > 0:
+                batch_pct = int(100 * state.embed_batch_current / state.embed_batch_total)
+                mini_width = 15
+                mini_filled = int(batch_pct / 100 * mini_width)
+                if mini_filled < mini_width:
+                    mini_bar = "━" * mini_filled + "╸" + "░" * (mini_width - mini_filled - 1)
+                else:
+                    mini_bar = "━" * mini_width
+                batch_info = (
+                    f"batch {state.embed_batch_current}/{state.embed_batch_total} "
+                    f"[blue]{mini_bar}[/blue] {batch_pct}%"
+                )
+            else:
+                batch_info = f"{state.chunk_count} chunks"
+            embed_line = f"     [{spinner_frame}] [yellow]Embedding[/yellow] → {batch_info}"
             lines.append(Text.from_markup(embed_line))
         else:
             lines.append(Text.from_markup("     [ ] Chunking"))
@@ -225,6 +242,8 @@ def _progress_context(  # noqa: PLR0915
                     state.sp_total = int(event.get("proc_total", state.sp_total))
                     state.phase = ""
                     state.chunk_count = 0
+                    state.embed_batch_current = 0
+                    state.embed_batch_total = 0
                     # Update database from first event if not set
                     if state.database == "...":
                         state.database = str(event.get("database", "..."))
@@ -236,6 +255,9 @@ def _progress_context(  # noqa: PLR0915
                         # detail is like "200 chunks"
                         with suppress(ValueError, IndexError):
                             state.chunk_count = int(str(detail).split()[0])
+                elif stage == "embed_batch":
+                    state.embed_batch_current = int(event.get("current", 0))
+                    state.embed_batch_total = int(event.get("total", 0))
                 elif stage == "proc_done":
                     units = event.get("work_units", 0)
                     if isinstance(units, int):
