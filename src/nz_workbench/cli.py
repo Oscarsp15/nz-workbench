@@ -4,27 +4,25 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 import typer
-from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from nz_workbench import __version__
 from nz_workbench.kb import indexer as kb_indexer
 from nz_workbench.kb.embedder import get_hardware_info
 from nz_workbench.logging_config import configure_logging_for_stdio, set_suppress_info_events
 from nz_workbench.mcp_server import run_stdio_server
+
+_PROGRESS_BAR_WIDTH = 30
 
 app = typer.Typer(
     name="nz-workbench",
@@ -47,111 +45,188 @@ def _parse_csv(value: str) -> list[str]:
     return [x for x in items if x]
 
 
-def _print_hardware_info(console: Console) -> None:
-    """Print hardware configuration before starting the progress bar."""
+def _get_hardware_line() -> str:
+    """Return hardware info as a formatted string."""
     hw = get_hardware_info()
     if hw.device == "cuda" and hw.gpu_name:
         vram_str = f", {hw.vram_gb}GB" if hw.vram_gb else ""
-        device_info = f"[green]CUDA[/green] ({hw.gpu_name}{vram_str})"
+        return f"[green]CUDA[/green] ({hw.gpu_name}{vram_str}) │ Batch: {hw.batch_size}"
+    return f"[yellow]CPU[/yellow] │ Batch: {hw.batch_size}"
+
+
+def _format_bytes(b: int) -> str:
+    """Format bytes as human-readable MB."""
+    return f"{b / (1024 * 1024):.1f} MB"
+
+
+def _format_time(seconds: float) -> str:
+    """Format seconds as H:MM:SS or M:SS."""
+    if seconds < 0:
+        return "--:--"
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+class _ProgressState:
+    """Mutable state for the progress display."""
+
+    def __init__(self, database: str) -> None:
+        self.database = database
+        self.sp_current = 0
+        self.sp_total = 0
+        self.bytes_processed = 0
+        self.bytes_total = 0
+        self.current_sp_name = ""
+        self.phase = ""  # "chunking" | "embedding" | ""
+        self.chunk_count = 0
+        self.start_time = time.perf_counter()
+
+    def elapsed(self) -> float:
+        return time.perf_counter() - self.start_time
+
+    def eta(self) -> float:
+        if self.sp_current == 0 or self.sp_total == 0:
+            return -1
+        elapsed = self.elapsed()
+        rate = self.sp_current / elapsed
+        remaining = self.sp_total - self.sp_current
+        return remaining / rate if rate > 0 else -1
+
+    def progress_pct(self) -> int:
+        if self.sp_total == 0:
+            return 0
+        return int(100 * self.sp_current / self.sp_total)
+
+
+def _build_panel(state: _ProgressState, spinner_frame: str) -> Panel:
+    """Build the Rich Panel for the current progress state."""
+    lines: list[Text | str] = []
+
+    # Progress bar
+    pct = state.progress_pct()
+    filled = int(pct / 100 * _PROGRESS_BAR_WIDTH)
+    if filled < _PROGRESS_BAR_WIDTH:
+        bar = "━" * filled + "╸" + "░" * (_PROGRESS_BAR_WIDTH - filled - 1)
     else:
-        device_info = "[yellow]CPU[/yellow]"
-    emit = console.print
-    emit(f"Device: {device_info} │ Batch: {hw.batch_size}")
-    emit("─" * 50)
+        bar = "━" * _PROGRESS_BAR_WIDTH
+    lines.append(
+        Text.from_markup(
+            f"  Progress: [bold]{state.sp_current}/{state.sp_total} SPs[/bold]  "
+            f"[blue]{bar}[/blue]  {pct}%"
+        )
+    )
+
+    # Data progress
+    lines.append(
+        Text.from_markup(
+            f"  Data:     {_format_bytes(state.bytes_processed)} / "
+            f"{_format_bytes(state.bytes_total)}"
+        )
+    )
+
+    # Time
+    elapsed_str = _format_time(state.elapsed())
+    eta_str = _format_time(state.eta())
+    lines.append(Text.from_markup(f"  Time:     {elapsed_str} elapsed │ ~{eta_str} remaining"))
+
+    # Separator
+    lines.append(Text("  " + "─" * 60))
+
+    # Current SP
+    if state.current_sp_name:
+        lines.append(Text.from_markup(f"  [bold cyan]⚡ {state.current_sp_name}[/bold cyan]"))
+
+        # Chunking phase
+        if state.phase == "chunking":
+            chunk_line = f"     [{spinner_frame}] [yellow]Chunking[/yellow]  → processing..."
+            lines.append(Text.from_markup(chunk_line))
+            lines.append(Text.from_markup("     [ ] Embedding"))
+        elif state.phase == "embedding":
+            chunk_info = f"{state.chunk_count} chunks" if state.chunk_count else "done"
+            lines.append(Text.from_markup(f"     [green]✓[/green] Chunking   → {chunk_info}"))
+            embed_line = f"     [{spinner_frame}] [yellow]Embedding[/yellow] → {state.chunk_count}"
+            lines.append(Text.from_markup(embed_line))
+        else:
+            lines.append(Text.from_markup("     [ ] Chunking"))
+            lines.append(Text.from_markup("     [ ] Embedding"))
+    else:
+        lines.append(Text.from_markup("  [dim]Discovering procedures...[/dim]"))
+
+    content = Group(*lines)
+    return Panel(
+        content,
+        title=f"[bold]KB Bootstrap: {state.database}[/bold]",
+        subtitle=f"[dim]{_get_hardware_line()}[/dim]",
+        border_style="blue",
+        padding=(0, 1),
+    )
 
 
 @contextmanager
-def _progress_context() -> Iterator[kb_indexer.ProgressCallback]:  # noqa: PLR0915
-    """Render a Rich progress bar on stderr and yield a callback that drives it.
-
-    Raises the root-logger level to WARNING while active so INFO events from
-    the indexer don't shred the bar. The bar is transient and clears on exit
-    so the final report table prints cleanly.
-    """
-
+def _progress_context(  # noqa: PLR0915
+    database: str = "",
+) -> Iterator[kb_indexer.ProgressCallback]:
+    """Render a Rich panel on stderr and yield a callback that drives it."""
     root_logger = logging.getLogger()
     previous_level = root_logger.level
-    # Raise the root level to CRITICAL so that errors and warnings from any
-    # library (including transformers' "Token indices sequence length…" warning)
-    # are suppressed while the Rich bar is active.  The bar is redrawn on every
-    # character written to stderr, so a single stray line breaks the layout and
-    # causes Rich to start a new bar below the existing one.
     root_logger.setLevel(logging.CRITICAL)
     set_suppress_info_events(True)
 
-    # Also control the HuggingFace transformers logging via its env-var so the
-    # warning is suppressed even before the root logger intercepts it.
     _prev_tv = os.environ.get("TRANSFORMERS_VERBOSITY")
     os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
     console = Console(stderr=True)
+    state = _ProgressState(database or "...")
+    spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    spinner_idx = [0]
 
-    # Show hardware info before starting progress
-    _print_hardware_info(console)
-
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.fields[sp_progress]}"),
-        TextColumn("•"),
-        TimeElapsedColumn(),
-        TextColumn("ETA"),
-        TimeRemainingColumn(),
-        console=console,
-        transient=True,
-        refresh_per_second=4,
-    )
-
-    # Track current phase and SP counts for display
-    current_phase: list[str] = [""]
-    sp_counts: dict[str, int] = {"current": 0, "total": 0}
+    def _render() -> Panel:
+        spinner_idx[0] = (spinner_idx[0] + 1) % len(spinner_chars)
+        return _build_panel(state, spinner_chars[spinner_idx[0]])
 
     try:
-        progress.start()
-        task_id = progress.add_task("Discovering procedures...", total=None, sp_progress="")
+        with Live(_render(), console=console, refresh_per_second=4, transient=True) as live:
 
-        def _on_progress(event: kb_indexer.ProgressEvent) -> None:
-            stage = event.get("stage")
-            if stage == "total_update":
-                total = event.get("total")
-                proc_total = event.get("proc_total", 0)
-                sp_counts["total"] = proc_total
-                if isinstance(total, int):
-                    progress.update(task_id, total=total)
-            elif stage == "proc_start":
-                proc_name = f"{event['database']}.{event['schema']}.{event['name']}"
-                proc_index = event.get("proc_index", 0)
-                proc_total = event.get("proc_total", sp_counts["total"])
-                sp_counts["current"] = proc_index
-                sp_counts["total"] = proc_total
-                current_phase[0] = ""
-                sp_progress = f"{proc_index}/{proc_total} SPs" if proc_total > 0 else ""
-                progress.update(task_id, description=proc_name, sp_progress=sp_progress)
-            elif stage == "phase":
-                phase = event.get("phase", "")
-                detail = event.get("detail")
-                if phase == "chunking":
-                    current_phase[0] = " → chunking"
-                elif phase == "embedding":
-                    current_phase[0] = f" → embedding ({detail})" if detail else " → embedding"
-                # Update description to include phase
-                current_desc = progress.tasks[task_id].description or ""
-                base_desc = current_desc.split(" → ")[0]
-                progress.update(task_id, description=f"{base_desc}{current_phase[0]}")
-            elif stage == "proc_done":
-                # Advance by work_units (bytes when nz-mcp reports size_bytes,
-                # else 1) so a big SP moves the bar proportional to its effort.
-                # This keeps the ETA stable across wildly varying proc sizes.
-                units = event.get("work_units", 1)
-                progress.update(task_id, advance=int(units) if isinstance(units, int) else 1)
+            def _on_progress(event: kb_indexer.ProgressEvent) -> None:
+                stage = event.get("stage")
+                if stage == "total_update":
+                    total = event.get("total")
+                    proc_total = event.get("proc_total", 0)
+                    if isinstance(total, int):
+                        state.bytes_total = total
+                    if proc_total:
+                        state.sp_total = proc_total
+                elif stage == "proc_start":
+                    state.current_sp_name = str(event.get("name", ""))
+                    state.sp_current = int(event.get("proc_index", 0))
+                    state.sp_total = int(event.get("proc_total", state.sp_total))
+                    state.phase = ""
+                    state.chunk_count = 0
+                    # Update database from first event if not set
+                    if state.database == "...":
+                        state.database = str(event.get("database", "..."))
+                elif stage == "phase":
+                    phase = event.get("phase", "")
+                    detail = event.get("detail")
+                    state.phase = str(phase)
+                    if phase == "embedding" and detail:
+                        # detail is like "200 chunks"
+                        with suppress(ValueError, IndexError):
+                            state.chunk_count = int(str(detail).split()[0])
+                elif stage == "proc_done":
+                    units = event.get("work_units", 0)
+                    if isinstance(units, int):
+                        state.bytes_processed += units
 
-        yield _on_progress
+                live.update(_render())
+
+            yield _on_progress
     finally:
-        progress.stop()
         set_suppress_info_events(False)
         root_logger.setLevel(previous_level)
-        # Restore TRANSFORMERS_VERBOSITY to whatever it was before.
         if _prev_tv is None:
             os.environ.pop("TRANSFORMERS_VERBOSITY", None)
         else:
@@ -208,7 +283,8 @@ def kb_bootstrap_cmd(
     if not dbs:
         raise typer.BadParameter("at least one database is required")
 
-    with _progress_context() as on_progress:
+    db_label = dbs[0] if len(dbs) == 1 else f"{len(dbs)} databases"
+    with _progress_context(database=db_label) as on_progress:
         report = kb_indexer.bootstrap(dbs, top_n=top_n, on_progress=on_progress)
     _print_index_report("KB bootstrap", report)
     raise typer.Exit(code=1 if report.errors else 0)
