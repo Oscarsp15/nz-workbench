@@ -175,10 +175,19 @@ def _progress_context(  # noqa: PLR0915
     root_logger.setLevel(logging.CRITICAL)
     set_suppress_info_events(True)
 
+    # Suppress all transformer/tokenizer warnings that break the Live display
     _prev_tv = os.environ.get("TRANSFORMERS_VERBOSITY")
+    _prev_tp = os.environ.get("TOKENIZERS_PARALLELISM")
+    _prev_hf = os.environ.get("HF_HUB_DISABLE_PROGRESS_BARS")
     os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
-    console = Console(stderr=True)
+    # Suppress specific loggers that might output during embedding
+    for logger_name in ("transformers", "sentence_transformers", "tokenizers"):
+        logging.getLogger(logger_name).setLevel(logging.CRITICAL)
+
+    console = Console(stderr=True, force_terminal=True)
     state = _ProgressState(database or "...")
     spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     spinner_idx = [0]
@@ -227,10 +236,16 @@ def _progress_context(  # noqa: PLR0915
     finally:
         set_suppress_info_events(False)
         root_logger.setLevel(previous_level)
-        if _prev_tv is None:
-            os.environ.pop("TRANSFORMERS_VERBOSITY", None)
-        else:
-            os.environ["TRANSFORMERS_VERBOSITY"] = _prev_tv
+        # Restore environment variables
+        for key, prev in [
+            ("TRANSFORMERS_VERBOSITY", _prev_tv),
+            ("TOKENIZERS_PARALLELISM", _prev_tp),
+            ("HF_HUB_DISABLE_PROGRESS_BARS", _prev_hf),
+        ]:
+            if prev is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prev
 
 
 def _print_index_report(title: str, report: kb_indexer.IndexReport) -> None:
