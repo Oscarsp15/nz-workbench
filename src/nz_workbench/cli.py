@@ -324,17 +324,21 @@ def kb_bootstrap_cmd(
     ),
 ) -> None:
     """Index production procedures into the local knowledge base (one-time)."""
-
     configure_logging_for_stdio()
     dbs = _parse_csv(databases)
     if not dbs:
         raise typer.BadParameter("at least one database is required")
 
     db_label = dbs[0] if len(dbs) == 1 else f"{len(dbs)} databases"
-    with _progress_context(database=db_label) as on_progress:
-        report = kb_indexer.bootstrap(dbs, top_n=top_n, on_progress=on_progress)
-    _print_index_report("KB bootstrap", report)
-    raise typer.Exit(code=1 if report.errors else 0)
+    try:
+        with _progress_context(database=db_label) as on_progress:
+            report = kb_indexer.bootstrap(dbs, top_n=top_n, on_progress=on_progress)
+        _print_index_report("KB bootstrap", report)
+        raise typer.Exit(code=1 if report.errors else 0)
+    except KeyboardInterrupt:
+        console = Console(stderr=True)
+        console.print("\n[yellow]Cancelled.[/yellow] Progress saved up to last completed SP.")
+        raise typer.Exit(code=130) from None
 
 
 @app.command("kb-refresh")
@@ -342,28 +346,36 @@ def kb_refresh_cmd(
     target: str = _ARG_PROC_FQN,
 ) -> None:
     """Re-index a single procedure when you know it changed in PROD."""
-
     configure_logging_for_stdio()
     parts = [p.strip() for p in target.split(".") if p.strip()]
     fqn_parts = 3
     if len(parts) != fqn_parts:
         raise typer.BadParameter("expected DB.SCHEMA.NAME")
     db, schema, name = parts
-    with _progress_context() as on_progress:
-        report = kb_indexer.refresh_one(db, schema, name, on_progress=on_progress)
-    _print_index_report("KB refresh", report)
-    raise typer.Exit(code=1 if report.errors else 0)
+    try:
+        with _progress_context() as on_progress:
+            report = kb_indexer.refresh_one(db, schema, name, on_progress=on_progress)
+        _print_index_report("KB refresh", report)
+        raise typer.Exit(code=1 if report.errors else 0)
+    except KeyboardInterrupt:
+        console = Console(stderr=True)
+        console.print("\n[yellow]Cancelled.[/yellow]")
+        raise typer.Exit(code=130) from None
 
 
 @app.command("kb-refresh-cron")
 def kb_refresh_cron_cmd() -> None:
     """Scan _V_PROCEDURE.LASTALTERTIME and re-index changed procedures (opt-in cron)."""
-
     configure_logging_for_stdio()
-    with _progress_context() as on_progress:
-        report = kb_indexer.refresh_cron(on_progress=on_progress)
-    _print_index_report("KB refresh-cron", report)
-    raise typer.Exit(code=1 if report.errors else 0)
+    try:
+        with _progress_context() as on_progress:
+            report = kb_indexer.refresh_cron(on_progress=on_progress)
+        _print_index_report("KB refresh-cron", report)
+        raise typer.Exit(code=1 if report.errors else 0)
+    except KeyboardInterrupt:
+        console = Console(stderr=True)
+        console.print("\n[yellow]Cancelled.[/yellow] Progress saved up to last completed SP.")
+        raise typer.Exit(code=130) from None
 
 
 @app.command("kb-export")
